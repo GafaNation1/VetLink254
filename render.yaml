@@ -1,0 +1,117 @@
+# render.yaml — Render Blueprint for deploying VetLink254 (api, ussd, web + managed Postgres & Redis).
+#
+# STATUS: DEPLOYMENT CONFIG READY — NOT YET DEPLOYED (2026-08-20). No Render account is connected,
+# so nothing below has been pushed to Render. Review the "secrets to fill in the Render dashboard"
+# section before the first deploy, then push this repo to GitHub and create a Blueprint from it.
+#
+# Runtime notes:
+#   - Schema is managed by Alembic + the admin seed: the api service's `releaseCommand` runs
+#     `alembic upgrade head && python -m scripts.create_admin` automatically on every deploy —
+#     create_all in app startup was REMOVED so migrations cannot drift.
+#   - All secrets (DATABASE_URL/REDIS_URL come from the managed services; AT_*/ADMIN_*/R2_*/SECRET_KEY
+#     are marked `sync: false` so their real values are pasted in the Render dashboard, never in git).
+services:
+  # --- Core API ---
+  - type: web
+    name: vetlink-api
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./apps/api/Dockerfile
+    buildCommand: ""
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    releaseCommand: alembic upgrade head && python -m scripts.create_admin
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: vetlink-postgres
+          property: connectionString
+      - key: REDIS_URL
+        fromDatabase:
+          name: vetlink-redis
+          property: connectionString
+      - key: ENVIRONMENT
+        value: production
+      - key: SECRET_KEY
+        sync: false        # long random value, set in the Render dashboard
+      - key: ADMIN_EMAIL
+        sync: false        # the single admin login email
+      - key: ADMIN_PASSWORD
+        sync: false        # the single admin login password (bcrypt-hashed into Postgres at deploy)
+      - key: CORS_ORIGINS
+        value: "*"         # dev/demo default — replace with the dashboard origin before production
+      - key: KVB_API_BASE_URL
+        value: stub        # real KVB endpoint when it exists (see docs/KVB_INTEGRATION.md)
+      - key: KVB_CLIENT_ID
+        sync: false
+      - key: KVB_CLIENT_SECRET
+        sync: false
+      - key: KVB_CACHE_TTL_SECONDS
+        value: "180"
+      - key: AT_USERNAME
+        sync: false        # real Africa's Talking creds (code complete, not yet live-verified)
+      - key: AT_API_KEY
+        sync: false
+      - key: AT_SENDER_ID
+        sync: false
+      - key: BOARD_NOTIFICATION_PHONE
+        sync: false
+      - key: R2_ENDPOINT_URL
+        sync: false        # real Cloudflare R2 creds (code complete, not yet live-verified)
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET_NAME
+        sync: false
+      - key: R2_PUBLIC_BASE_URL
+        sync: false
+      - key: LOCAL_UPLOAD_DIR
+        value: /app/uploads   # local-disk KYC fallback used until R2_* are set
+      - key: DOC_UPLOAD_MAX_MB
+        value: "10"
+
+  # --- USSD thin adapter (reachable by a real telecom gateway at an onrender.com HTTPS URL) ---
+  - type: web
+    name: vetlink-ussd
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./apps/ussd/Dockerfile
+    buildCommand: ""
+    startCommand: gunicorn --bind 0.0.0.0:8001 app.main:app
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: API_BASE_URL
+        fromService:
+          name: vetlink-api
+          type: web
+          property: url       # resolves to the api service's public URL
+      - key: REDIS_URL
+        fromDatabase:
+          name: vetlink-redis
+          property: connectionString
+      - key: SESSION_TTL_SECONDS
+        value: "180"
+
+  # --- Public read-only verified-clinics dashboard (static site) ---
+  # NOTE: before first deploy, edit apps/web/index.html `window.VETLINK_API_BASE` from
+  # "http://localhost:8000" to the deployed vetlink-api URL (or "" if you later proxy /api/v1 here).
+  - type: static_site
+    name: vetlink-web
+    buildCommand: ""
+    staticPublishPath: apps/web
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+
+  # --- Managed data services ---
+  - type: pservers
+    name: vetlink-postgres
+    plan: starter
+
+  - type: redis
+    name: vetlink-redis
+    plan: starter
