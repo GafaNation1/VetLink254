@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: Run test suites (apps/api + apps/ussd)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Run the full test suite
+        run: ./run_tests.sh
+        shell: bash
+
+      - name: Verify Dockerfiles still build (api + ussd + web)
+        run: |
+          docker build -t vetlink-api-ci ./apps/api
+          docker build -t vetlink-ussd-ci ./apps/ussd
+          docker build -t vetlink-web-ci ./apps/web
+        shell: bash
