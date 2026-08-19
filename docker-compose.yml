@@ -1,0 +1,93 @@
+# docker-compose.yml — Local dev orchestration for VetLink254 api, ussd, web, postgres, and redis services
+services:
+  api:
+    build: ./apps/api
+    container_name: vetlink_api
+    restart: unless-stopped
+    env_file:
+      - ./apps/api/.env.example
+    environment:
+      DATABASE_URL: postgresql://vetlink:vetlink_pass@postgres:5432/vetlink254
+      REDIS_URL: redis://redis:6379/0
+      ENVIRONMENT: development
+      SECRET_KEY: dev-secret-key-change-in-prod-0123456789abcdef
+      # Minimal auth (PART 3): dev-demo admin creds ONLY. Production sets real values via Render.
+      ADMIN_EMAIL: admin@vetlink254.local
+      ADMIN_PASSWORD: dev-admin-password-change-me
+      CORS_ORIGINS: "*"
+      KVB_API_BASE_URL: stub
+      KVB_CLIENT_ID: kvb-dev-client-id
+      KVB_CLIENT_SECRET: kvb-dev-client-secret
+      KVB_CACHE_TTL_SECONDS: "180"
+      AT_USERNAME: ""
+      AT_API_KEY: ""
+      AT_SENDER_ID: ""
+      BOARD_NOTIFICATION_PHONE: ""
+      # R2 unset here -> local-disk KYC storage for the local demo (served back at /uploads).
+      R2_ENDPOINT_URL: ""
+      R2_ACCESS_KEY_ID: ""
+      R2_SECRET_ACCESS_KEY: ""
+      R2_BUCKET_NAME: ""
+      R2_PUBLIC_BASE_URL: ""
+      LOCAL_UPLOAD_DIR: /app/uploads
+      DOC_UPLOAD_MAX_MB: "10"
+    command: >
+      sh -c "alembic upgrade head && python -m scripts.create_admin &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - ./apps/api:/app
+
+  ussd:
+    build: ./apps/ussd
+    container_name: vetlink_ussd
+    restart: unless-stopped
+    env_file:
+      - ./apps/ussd/.env.example
+    environment:
+      API_BASE_URL: http://api:8000
+      REDIS_URL: redis://redis:6379/0
+      SESSION_TTL_SECONDS: "180"
+    ports:
+      - "8001:8001"
+    depends_on:
+      - api
+      - redis
+    volumes:
+      - ./apps/ussd:/app
+
+  web:
+    build: ./apps/web
+    container_name: vetlink_web
+    restart: unless-stopped
+    ports:
+      - "8002:8002"
+    depends_on:
+      - api
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: vetlink_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: vetlink
+      POSTGRES_PASSWORD: vetlink_pass
+      POSTGRES_DB: vetlink254
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    container_name: vetlink_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+
+volumes:
+  postgres_data:
