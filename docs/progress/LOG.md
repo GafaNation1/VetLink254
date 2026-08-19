@@ -1,0 +1,526 @@
+## [2026-08-13] Monorepo Skeleton & Core API Foundation Setup
+- Model/agent: google/gemini-3.6-flash
+- Goal: Set up the monorepo skeleton (apps/ussd, apps/web placeholders) and apps/api foundation with FastAPI, SQLAlchemy, PostgreSQL, Redis, Alembic migration, and basic v1 endpoints for User, Clinic, and Booking models.
+- Files created:
+  - apps/ussd/README.md
+  - apps/web/README.md
+  - apps/api/README.md
+  - apps/api/requirements.txt
+  - apps/api/Dockerfile
+  - apps/api/.env.example
+  - apps/api/app/__init__.py
+  - apps/api/app/main.py
+  - apps/api/app/config.py
+  - apps/api/app/core/__init__.py
+  - apps/api/app/core/database.py
+  - apps/api/app/models/__init__.py
+  - apps/api/app/models/user.py
+  - apps/api/app/models/clinic.py
+  - apps/api/app/models/booking.py
+  - apps/api/app/schemas/__init__.py
+  - apps/api/app/schemas/user.py
+  - apps/api/app/schemas/clinic.py
+  - apps/api/app/schemas/booking.py
+  - apps/api/app/api/__init__.py
+  - apps/api/app/api/v1/__init__.py
+  - apps/api/app/api/v1/users.py
+  - apps/api/app/api/v1/clinics.py
+  - apps/api/app/api/v1/bookings.py
+  - apps/api/alembic.ini
+  - apps/api/alembic/env.py
+  - apps/api/alembic/script.py.mako
+  - apps/api/alembic/versions/001_initial_migration.py
+  - docker-compose.yml
+  - docs/progress/STATUS.md
+  - .gitignore (root)
+- Files modified:
+  - docs/progress/LOG.md
+- Key decisions made:
+  - Selected FastAPI + SQLAlchemy 2.0 + Alembic + PostgreSQL + Redis as outlined in architecture.md.
+  - Stored clinic services list as JSON column for portability and flexible schema handling.
+  - Placed docker-compose.yml at repository root orchestration API, PostgreSQL, and Redis containers.
+  - Configured bare-bones endpoints (GET list, POST create) without auth middleware as specified for Step 1.
+  - Added root .gitignore so `.env` and __pycache__ are never committed (enforces "never commit real credentials").
+- Follow-up verification (same day, Docker now available):
+  - Verified Step 1 end-to-end in this session: `docker-compose up --build -d` succeeded, all 3 containers running.
+  - `GET /health` returned `{"status":"ok"}`.
+  - `POST /api/v1/clinics/` created a clinic (id: 1).
+  - `GET /api/v1/clinics/` returned the created record.
+- How to verify it works:
+  - Run docker-compose up --build -d from repo root
+  - Send GET request to http://localhost:8000/health (expect {"status": "ok"})
+  - Send POST request to http://localhost:8000/api/v1/clinics/ with payload {"name": "VetCare Clinic", "county": "Nairobi"}
+  - Send GET request to http://localhost:8000/api/v1/clinics/ and verify created record
+- Known gaps / not done yet:
+  - No authentication, JWT, or phone OTP verification attached to endpoints.
+  - Matching engine, wallet, registration KYC docs, and USSD session engine are not implemented.
+  - apps/ussd and apps/web are empty directories containing placeholder README files.
+  - VERIFICATION LIMITATION: This session's environment has NO working docker (Docker Desktop WSL integration not activated) and NO pip/python-venv, so `docker-compose up` and end-to-end endpoint checks could NOT be run here. Only Python syntax check passed (compileall). A future agent MUST run the verify commands below on a machine with Docker available. If `postgres_data` volume or port 5432/8000 conflict occurs, adjust ports in docker-compose.yml.
+  - Note: `app/main.py` runs `Base.metadata.create_all` on startup for dev convenience; the Alembic migration `001_initial_migration` is the source of truth for schema. Both create the same tables today, but future schema changes should ONLY go through Alembic.
+
+## [2026-08-13] Matching Engine (nearest verified clinic) + GET /match + minimal PATCH /clinics/{id}
+- Model/agent: deepseek-v4-flash-free (opencode)
+- Goal: Add the Matching Engine to apps/api ONLY — given a location and a service, return the nearest verified clinics, exposed as GET /api/v1/match, plus a minimal clinic location update endpoint so test data has coordinates.
+- Files created:
+  - apps/api/app/services/matching_engine.py (`find_nearest_clinics` + `haversine_km`)
+  - apps/api/app/schemas/match.py (`MatchResult`)
+  - apps/api/app/api/v1/match.py (GET /match router)
+- Files modified:
+  - apps/api/app/schemas/clinic.py (added `ClinicUpdate` Pydantic schema)
+  - apps/api/app/schemas/__init__.py (export `ClinicUpdate`, `MatchResult`)
+  - apps/api/app/api/v1/clinics.py (added PATCH /clinics/{clinic_id})
+  - apps/api/app/main.py (registered match router)
+  - docs/progress/LOG.md, docs/progress/STATUS.md
+- Key decisions made:
+  - HAVERSINE OVER POSTGIS (deliberate, per scope): distance is computed in plain Python (`app/services/matching_engine.py`) with the Haversine formula on the existing `lat`/`lng` Float columns. This is correct and sufficient at current clinic volume. PostGIS (`ST_Distance` on PostGIS geometry columns, architecture Section 3.4 / 8) is the planned future optimization once clinic volume is large — logged as a known future step, NOT done now. No schema/migration change was needed because no geospatial columns exist yet.
+  - Matching filters: `verification_status == "verified"`; the requested service must be present in the clinic's `services` JSON list (case-insensitive substring-equality on the lowercased list); clinics with null/empty services are excluded; clinics with missing lat/lng are excluded and logged at DEBUG (expected at this stage since no geocoding is wired up).
+  - MatchResult schema lives in `apps/api/app/schemas/match.py` because it is a response schema for a domain feature (matching), following the existing convention of one schema file per domain area (user.py, clinic.py, booking.py, verification.py). It subclasses `ClinicResponse` and adds `distance_km` so it reuses the canonical clinic shape without duplicating fields. Alternative considered: adding distance_km to ClinicResponse itself — rejected, because clinic responses should stay distance-free; distance is a matching-context value.
+  - The match endpoint builds each MatchResult from `ClinicResponse.model_dump()` + `distance_km` rather than `MatchResult.model_validate(clinic)`, because Pydantic's `from_attributes` cannot populate the computed `distance_km` from the ORM object (it would fail validation). `distance_km` is rounded to 3 decimals.
+  - `limit` query param validated with `Query(3, ge=1, le=20)`.
+  - PATCH /clinics/{clinic_id} added because no clinic update endpoint existed. Scope-limited to lat/lng/services only (body schema `ClinicUpdate` with all-optional fields; None values are ignored so a partial update can't null out fields unintentionally). NO auth — same known-gap pattern as the verify endpoint; real auth is a later step.
+  - Clinic 2 "PetCare Global Clinic" was updated in the live DB via PATCH to lat=-1.2833, lng=36.8167 (central Nairobi) so the match endpoint has real data to find. Clinic 3 "Texas Vet Partners" is verified but has a null services list, so it is correctly excluded from matching regardless of distance (it also has no lat/lng).
+- How to verify it works (verified live against the running docker-compose stack — vetlink_api had to be `docker restart`ed because uvicorn runs WITHOUT --reload; the code is volume-mounted so a restart is sufficient, no rebuild):
+  - Update clinic 2's location:
+    `curl -X PATCH http://localhost:8000/api/v1/clinics/2 -H "Content-Type: application/json" -d '{"lat": -1.2833, "lng": 36.8167}'`
+  - Match from a nearby Nairobi point (lat -1.2921, lng 36.8219) — returns clinic 2 with distance_km ~1.137:
+    `curl "http://localhost:8000/api/v1/match/?lat=-1.2921&lng=36.8219&service=consultation"`
+  - Case-insensitive service match works (VACCINATION == vaccination):
+    `curl "http://localhost:8000/api/v1/match/?lat=-1.2921&lng=36.8219&service=VACCINATION"`
+  - Empty result (not an error) for a service no clinic offers:
+    `curl "http://localhost:8000/api/v1/match/?lat=-1.2921&lng=36.8219&service=grooming"` -> `[]`
+  - limit honored:
+    `curl "http://localhost:8000/api/v1/match/?lat=-1.2921&lng=36.8219&service=consultation&limit=1"` -> only clinic 2
+- Known gaps / not done yet:
+  - Haversine (Python) is the distance computation; PostGIS ST_Distance is the planned optimization once clinic volume is large. Revisit when the clinics table grows (or when USSD latency budget becomes a concern).
+  - Matching currently does NOT implement architecture Section 3.4's radius-tier fallback (5km→20km→50km→nearest regardless) nor the wallet-balance lead-fee filter — out of scope this step, explicit next-step candidates.
+  - No geocoding is wired up, so clinics without lat/lng are silently excluded (logged at DEBUG). A geocoding integration (maps/geocoding_client.py per architecture Section 7) is a future step.
+  - PATCH /clinics/{id} has NO auth — anyone can change a clinic's location/services. Same known security gap pattern as the verify endpoint; real auth must be added before production.
+  - No tests yet (repo-wide gap, unchanged).
+  - No new dependencies were added (Haversine implemented with stdlib `math`), so requirements.txt is unchanged.
+
+## [2026-08-13] Stopgap Admin-Token Auth (X-Admin-Token) on verify + PATCH clinics
+- Model/agent: deepseek-v4-flash-free (opencode)
+- Goal: Close the "anyone can approve/reject/edit a clinic" security gap with a minimal stopgap — a single admin API token checked via the `X-Admin-Token` header on POST /clinics/{id}/verify and PATCH /clinics/{id} only; all other endpoints stay open for now.
+- Files created:
+  - apps/api/app/core/security.py (`require_admin_token` FastAPI dependency — compares `X-Admin-Token` header to `ADMIN_API_TOKEN`; 401 with clear message if missing/wrong)
+- Files modified:
+  - apps/api/app/config.py (added `ADMIN_API_TOKEN` setting with dev placeholder default)
+  - apps/api/.env.example (added `ADMIN_API_TOKEN=dev-admin-token-change-me` + comment: must be changed in production)
+  - apps/api/app/api/v1/verification.py (added `admin: None = Depends(require_admin_token)` to POST /clinics/{id}/verify)
+  - apps/api/app/api/v1/clinics.py (added `admin: None = Depends(require_admin_token)` to PATCH /clinics/{id})
+  - docker-compose.yml (added `ADMIN_API_TOKEN` to api service environment so local dev works out of the box)
+  - docs/progress/LOG.md, docs/progress/STATUS.md
+- Key decisions made:
+  - STOPGAP, NOT the final auth system. This is deliberately NOT user login/JWT/phone-OTP/roles (farmer/vet/clinic/admin). The architecture (architecture.md Section 3.5, Section 6 roles) requires proper auth with per-role permissions eventually; this stopgap exists only to close the wide-open verify/PATCH gap NOW so random requests cannot approve/reject clinics or edit their data. Full JWT/OTP auth with roles is the logged next step.
+  - Single shared admin token (ADMIN_API_TOKEN env var), compared against a custom `X-Admin-Token` header. No per-role tokens, no expiry, no per-user identity — that is the deliberate limit of a stopgap.
+  - Dependency implemented with FastAPI's built-in `Header` + `Depends` only — NO new package required, requirements.txt is unchanged (verified: not needed).
+  - Endpoints left OPEN deliberately (logged reasoning): GET /clinics list & detail, POST /clinics (create), POST/GET /clinics/{id}/documents (document submission), GET /match — these are public-ish or farmer/clinic-initiated actions per the flow in architecture.md Section 9 (registration is initiated by the clinic owner, not the admin). Only the admin actions (approve/reject = verify, and editing clinic data = PATCH) are protected. This reasoning is logged rather than silently protecting everything.
+  - 401 (not 403) chosen for BOTH missing and wrong tokens so unauthenticated callers don't learn whether a token is valid; message clearly says an admin token is required.
+  - Default `ADMIN_API_TOKEN=dev-admin-token-change-me` in config.py/.env.example so the stack runs out of the box locally; the comment and this log entry make it explicit this MUST be changed in production.
+- How to verify it works (verified live against running docker-compose stack; `docker-compose up -d` picks up env change via env_file/container env, then `docker restart vetlink_api` since uvicorn runs WITHOUT --reload):
+  - WITHOUT header → 401: `curl -i -X POST http://localhost:8000/api/v1/clinics/2/verify -H "Content-Type: application/json" -d '{"decision":"approved","reviewed_by":"admin@vetlink254","reason":"test"}'`
+  - WITH header → works: same curl + `-H "X-Admin-Token: dev-admin-token-change-me"`
+  - WITHOUT header on PATCH → 401: `curl -i -X PATCH http://localhost:8000/api/v1/clinics/2 -H "Content-Type: application/json" -d '{"lat": -1.2833}'`
+  - WITH header on PATCH → works.
+  - Open endpoints unaffected (no token needed): `curl http://localhost:8000/api/v1/clinics/`, `curl http://localhost:8000/api/v1/clinics/2`, `curl -X POST http://localhost:8000/api/v1/clinics/ -H "Content-Type: application/json" -d '{"name":"Probe Clinic","county":"Nairobi"}'`, `curl -X POST http://localhost:8000/api/v1/clinics/2/documents -H "Content-Type: application/json" -d '{"doc_type":"license","file_url":"https://s3.example.com/probe.pdf"}'`.
+  - Wrong token → 401: same curl with `-H "X-Admin-Token: wrong-token"`.
+- Live verification results (this session, docker-compose stack, container `vetlink_api` recreated with `docker-compose up -d --no-build` to pick up the new ADMIN_API_TOKEN env):
+  - PATCH /clinics/2 WITHOUT token → HTTP 401, `{"detail":"Valid X-Admin-Token header required (admin action)"}` ✓
+  - POST /clinics/2/verify WITHOUT token → HTTP 401, same message ✓
+  - PATCH /clinics/2 WITH wrong token → HTTP 401 ✓
+  - PATCH /clinics/2 WITH `X-Admin-Token: dev-admin-token-change-me` → HTTP 200 ✓
+  - POST /clinics/2/verify WITH correct token (reject, then approve) → HTTP 200 both ✓ (clinic 2 restored to `verified`)
+  - GET /clinics, GET /clinics/2, POST /clinics (create), POST /clinics/2/documents, GET /clinics/2/documents, GET /match — ALL still work WITHOUT any token ✓ (open endpoints unaffected)
+  - OBSERVATION: re-approving clinic 2 via the count-based unique_code generator re-issued code `VL254-KE-00002` (was VL254-KE-00001) — this is the PRE-EXISTING count-based generator behavior already logged as a known gap (not concurrency-safe / re-issues on re-approval), not caused by this auth change.
+- Known gaps / not done yet:
+  - This is a stopgap: single shared token, no per-user identity, no roles, no JWT, no phone OTP. The real auth system (JWT + phone OTP + roles farmer/vet/clinic/admin, per architecture.md Section 3.5 / Section 6) is still the eventual target and must replace this before production. Anyone who knows the (single) admin token can still do any admin action — that is inherent to a shared-token stopgap.
+  - Token is in plaintext env; not integrated with any secret manager / not hashed. Fine for local dev.
+  - Document submission (POST documents) and POST create clinics remain unauthenticated by design (farmer/clinic-initiated) — if those later become abusive, they need their own auth path, not the admin token.
+
+## [2026-08-13] Cleanup Scan + Global-Scope Correction + Registration & Verification (KYC)
+- Model/agent: deepseek-v4-flash-free (opencode)
+- Goal: (a) delete any empty/placeholder files no longer needed, (b) correct Kenya-only assumptions to global scope, (c) build clinic Registration & Verification (KYC) in apps/api only.
+- Files created:
+  - apps/api/app/models/verification_document.py
+  - apps/api/app/services/__init__.py
+  - apps/api/app/services/registration_service.py
+  - apps/api/app/schemas/verification.py
+  - apps/api/app/api/v1/verification.py
+  - apps/api/alembic/versions/002_verification_kyc.py
+- Files modified:
+  - apps/api/app/models/clinic.py (added `verifying_authority`, `verification_note`, `verification_documents` relationship)
+  - apps/api/app/models/__init__.py (export VerificationDocument)
+  - apps/api/app/schemas/clinic.py (added `verifying_authority`, `verification_note` to schemas)
+  - apps/api/app/schemas/__init__.py (export verification schemas)
+  - apps/api/app/api/v1/clinics.py (added GET /clinics/{id})
+  - apps/api/app/main.py (register verification router)
+  - docs/progress/LOG.md, docs/progress/STATUS.md
+- Cleanup result: Full scan (excluding .git) found ZERO empty files and ZERO empty directories — nothing to delete. The `apps/ussd/README.md` and `apps/web/README.md` are intentional placeholders for apps not yet built (architecture.md Section 7 + AGENT_PROTOCOL Step 1 keep them), so they were deliberately kept. No silent deletions were made.
+- Key decisions made:
+  - GLOBAL-SCOPE CORRECTION (deliberate architecture change): The platform is global, not Kenya-only. `verifying_authority` (free-text short code, e.g. "KVB-KE", "AVMA-US") replaced any assumption of a single Kenyan regulatory body on the Clinic model. Document types are generic and not KVB-specific ("license", "id", "proof_of_premises", "indemnity_insurance", etc.). KVB is treated as ONE example of a verifying authority. The name "VetLink254" and the "VL254-" code prefix are retained as the brand's stable product prefix, but nothing else is Kenya-coupled.
+  - unique_code format decided: `VL254-<2-letter country/region code>-<zero-padded 5-digit sequence>`, e.g. `VL254-KE-00001`. Region code is derived from the LAST dash-delimited segment of `verifying_authority` ("KVB-KE" -> "KE", "AVMA-US" -> "US"); falls back to "XX" when unparseable. Sequence is a simple `COUNT(unique_code IS NOT NULL) + 1` across ALL clinics (global sequence, not per-country) — deliberately simple; a dedicated sequence table/transaction is a known future hardening step for concurrency under simultaneous approvals. Implemented in `app/services/registration_service.py`.
+  - Verification rejection reason is stored on the CLINIC record in `verification_note` (new column), because a single verify decision covers potentially many documents; each document additionally gets `reviewed_by`/`reviewed_at`/`status` updated. Documents with non-pending status are left untouched by a later verify call.
+  - Submitting a document to a clinic whose status is "rejected" flips it back to "pending_verification" so re-review is possible (verified live).
+  - Added GET /clinics/{clinic_id} (single clinic) so a caller can inspect unique_code + verification_status post-verify.
+  - Two clinics were created as live test data: id 2 "PetCare Global Clinic" (KVB-KE, verified, VL254-KE-00001) and id 3 "Texas Vet Partners" (AVMA-US, verified, VL254-US-00002). These can be deleted if not wanted.
+- How to verify it works (verified live against running docker-compose stack):
+  - Apply migration: `docker exec vetlink_api alembic stamp 001_initial_migration && docker exec vetlink_api alembic upgrade head` (stamp only needed if tables already exist from create_all). Then `docker restart vetlink_api`.
+  - Submit a document:
+    `curl -X POST http://localhost:8000/api/v1/clinics/2/documents -H "Content-Type: application/json" -d '{"doc_type":"license","file_url":"https://s3.example.com/licence.pdf"}'`
+  - List documents:
+    `curl http://localhost:8000/api/v1/clinics/2/documents`
+  - Verify/approve:
+    `curl -X POST http://localhost:8000/api/v1/clinics/2/verify -H "Content-Type: application/json" -d '{"decision":"approved","reviewed_by":"admin@vetlink254","reason":"Docs valid"}'`
+  - GET the clinic to see new status/code:
+    `curl http://localhost:8000/api/v1/clinics/2`  -> `verification_status: "verified"`, `unique_code: "VL254-KE-00001"`
+  - Reject example:
+    `curl -X POST http://localhost:8000/api/v1/clinics/3/verify -H "Content-Type: application/json" -d '{"decision":"rejected","reviewed_by":"admin@vetlink254","reason":"License expired"}'`
+- Known gaps / not done yet:
+  - **KNOWN SECURITY GAP**: the POST /clinics/{clinic_id}/verify endpoint has NO auth/permissions — anyone who can reach the API can approve or reject any clinic. Deliberately out of scope this step; real auth (admin/board roles, JWT, phone OTP) must be added before production.
+  - unique_code generator is not concurrency-safe under simultaneous approvals (COUNT-based sequence). Needs a sequence table/lock for scale.
+  - Document upload is currently a `file_url` string only — actual file upload/object storage (S3-compatible, architecture Section 8) is a later step.
+  - No doc-type validation/allowlist; `doc_type` is free text for flexibility across jurisdictions.
+  - Matching engine, wallet/payments, USSD adapter, apps/web still not built (per instructions, intentionally stopped after KYC).
+
+## [2026-08-13] USSD Thin Adapter (apps/ussd) — "Find a Vet" Flow Only
+- Model/agent: deepseek-v4-flash-free (opencode)
+- Goal: Build apps/ussd as a thin Flask adapter for a single "find nearest vet" flow — session/menu handling only, delegating all matching to apps/api over HTTP (no wallet, no payment, no booking creation; booking creation explicitly deferred).
+- Files created:
+  - apps/ussd/app/__init__.py
+  - apps/ussd/app/main.py (webhook receiver POST /ussd + local /simulate sandbox + /health)
+  - apps/ussd/app/session_store.py (Redis-backed session state, 180s TTL, no silent in-memory fallback)
+  - apps/ussd/app/menu_tree.py (declarative menu tree: Welcome -> Find a vet -> animal -> service -> location -> results -> clinic details)
+  - apps/ussd/app/api_client.py (thin requests client for apps/api GET /api/v1/match — never touches the DB)
+  - apps/ussd/requirements.txt (flask==3.0.3, redis==5.0.7, requests==2.32.3, gunicorn==22.0.0)
+  - apps/ussd/Dockerfile (gunicorn on port 8001)
+- Files modified:
+  - docker-compose.yml (added `ussd` service, separate container `vetlink_ussd`, port 8001, depends_on api+redis)
+  - apps/ussd/README.md (replaced placeholder with build/simulate instructions)
+  - docs/progress/LOG.md, docs/progress/STATUS.md
+- Existing Flask prototype — FOUND AND REUSED:
+  - Located at `/mnt/c/Users/TH/Downloads/ussd test/app.py` (+ `VetLink_data.json`, `petcare_data.json`). It is the "roughly 0.5% complete" prototype architecture.md Section 7 warned about: a full-featured USSD backend with embedded business logic (JSON-file DataStore, daily provider billing, simulated M-Pesa STK push, memberships, pet sales/adoption, events, SMS/email stubs).
+  - CASE APPLIED: reused the prototype's USSD *conventions* as the starting point for `apps/ussd/app/main.py` — POST `/ussd` webhook reading `sessionId`/`phoneNumber`/`text`, text split on `*`, `CON`/`END` menu bodies. All embedded business logic was STRIPPED (not ported) per the thin-adapter discipline: no DataStore, no billing, no M-Pesa, no memberships. Matching is delegated to apps/api via HTTP. The old prototype files were NOT copied into the repo (they live outside the repo in Downloads); nothing was deleted.
+- Key decisions made:
+  - SESSION/Redis DESIGN (architecture.md Section 3.2 + Section 6 `ussd_sessions` "lives in Redis, not Postgres"): Redis (present in docker-compose since Step 1 but previously unused) now backs USSD state. Key `ussd:session:{session_id}`, value JSON `{node, phone, context}`, TTL 180s (`SESSION_TTL_SECONDS`, refreshed on every CON continuation). Sessions are DELETED when the response is an END screen (terminal clinic details, "00", or no-match) so state cannot linger or resurrect after the gateway closes the session. Redis unreachable at any point => `SessionStoreError` logged as a BLOCKING issue and the user receives "END Service temporarily unavailable" — deliberately NO in-memory fallback (that would break statelessness; a second replica would lose the menu position). /health reports redis status.
+  - FIXED-LIST-INSTEAD-OF-GPS (architecture.md Section 4 — "USSD has no GPS"): location is a fixed list of Nairobi sub-counties — Westlands / Kasarani / Embakasi / Dagoretti — each mapped to a hardcoded lat/lng constant used only as the `lat`/`lng` args for apps/api's match endpoint. Animal types (Dog/Cat/Cattle/Poultry/Other) and services (Consultation/Vaccination/Emergency — mirroring the lowercase values actually in clinic `services` data) are also fixed lists in menu_tree.py; service names are lowercased before the call because /api/v1/match matches case-insensitively.
+  - BOOKING CREATION DELIBERATELY NOT BUILT: the task permitted a free status-only booking record, but the same brief lists "booking creation, payment — all future steps" as known gaps. The flow therefore ends at a read-only clinic details END screen. This keeps the adapter strictly thin and avoids adding user/booking plumbing on the api side this step. Logged as a future step, not silently skipped.
+  - THIN-ADAPTER DISCIPLINE: the USSD container has NO DATABASE_* env and no psycopg2/sqlalchemy in its requirements — it physically cannot touch Postgres. It owns only the menu tree + session state; matching is a single HTTP call to GET /api/v1/match (the match response already carries every clinic field needed for the details screen, so no further api calls are needed).
+  - DECLARATIVE TREE, not if/else: menu_tree.py is a dict of MenuNode/MenuOption; only two nodes are dynamic by nature (the `results` screen is built from the match response; `clinic_details` renders from the stored match JSON). Navigating, storing choices, back ("0"), and end ("00"/"000") are all handled generically by one engine in main.py.
+  - TEST APPROACH — chose option (a): a `/simulate` GET/POST endpoint that mimics an Africa's Talking-style sandbox (same session_id, accumulate `text` joined with `*`), so the whole menu is walkable via curl. POST /ussd was ALSO verified with the real gateway field names (sessionId/phoneNumber/text). The simulate endpoint is dev-only and unauthenticated.
+  - NEW DEPENDENCIES (added to apps/ussd/requirements.txt, per protocol): flask, redis, requests, gunicorn. apps/api requirements.txt unchanged.
+- How to verify it works (verified live against running docker-compose stack; `docker compose up --build -d` now starts api/postgres/redis/ussd; gunicorn runs WITHOUT --reload, so code edits require `docker restart vetlink_ussd` — the app dir is volume-mounted):
+  - Service up + Redis connected: `curl -s http://localhost:8001/health` -> `{"redis":"connected","status":"ok"}`
+  - FULL WALKTHROUGH (Consultation from Westlands -> clinic 2 "PetCare Global Clinic", 2.216 km), one curl per step with the SAME session_id and accumulated text:
+    `curl "http://localhost:8001/simulate?session_id=test3&text="`                 -> CON Welcome (1. Find a vet)
+    `curl "http://localhost:8001/simulate?session_id=test3&text=1"`                -> CON animal type
+    `curl "http://localhost:8001/simulate?session_id=test3&text=1*1"`              -> CON service
+    `curl "http://localhost:8001/simulate?session_id=test3&text=1*1*1"`            -> CON location
+    `curl "http://localhost:8001/simulate?session_id=test3&text=1*1*1*1"`          -> CON "Clinics near Westlands (1 found): 1. PetCare Global Clinic - 2.216 km"
+    `curl "http://localhost:8001/simulate?session_id=test3&text=1*1*1*1*1"`        -> END clinic details (VL254-KE-00002, services consultation, vaccination)
+  - Real gateway webhook format (same flow): `curl -X POST http://localhost:8001/ussd -d "sessionId=gw1&phoneNumber=%2B254712345678&text=1*4*1*3"` etc. — verified end-to-end (Poultry -> Consultation -> Embakasi -> PetCare Global Clinic 11.445 km).
+  - Vaccination @ Kasarani matches clinic 2 (10.442 km) — session va2 step-by-step verified.
+  - Emergency -> END "No verified clinics offer Emergency near Westlands right now..." (no clinic offers it in DB yet — correct empty-result handling, not an error).
+  - Redis state mid-flow: `docker exec vetlink_redis redis-cli GET "ussd:session:test3"` shows node + full context; TTL ~179s; key deleted after "00" (EXISTS 0) and after terminal details.
+  - 00 end: `curl "http://localhost:8001/simulate?session_id=end1&text=1*1*00"` -> "END Thank you for using VetLink254. Goodbye!" and session key gone.
+  - Back navigation: from results press 0 -> returns to location menu (verified session ba1).
+- Known gaps / not done yet:
+  - Real telecom gateway integration (Africa's Talking / other aggregator), short code, public HTTPS endpoint (ngrok) — the /simulate and POST /ussd endpoints stand in for this. Webhook currently unauthenticated (gateway IP allow-listing / HMAC is a future hardening step).
+  - Booking creation, wallet, payment are ALL future steps per this task's scope — the flow intentionally ends at read-only clinic details.
+  - More animal types / services / locations: only Dog/Cat/Cattle/Poultry/Other, Consultation/Vaccination/Emergency, and 4 Nairobi sub-counties. Real ward-level data + GPS fallback for returning users is future work.
+  - Emergency currently returns zero matches because no clinic in the DB offers it; results will appear once clinics add the service.
+  - No USSD-side auth/phone-OTP (matches the global known gap; real auth is a separate logged next step).
+  - The /simulate dev endpoint is open and has no auth — fine for local sandbox, must be locked down or removed before any exposure beyond localhost.
+  - No tests yet (repo-wide gap, unchanged).
+
+## [2026-08-13] CORS on apps/ussd /simulate + /ussd (dev-only, all origins)
+- Model/agent: deepseek-v4-flash-free (opencode)
+- Goal: Allow a browser-based page served from a different origin to call POST/GET on http://localhost:8001 (so a local phone-simulator UI works), by adding flask-cors to apps/ussd ONLY and enabling it for all origins on the /simulate and /ussd routes.
+- Files created: none.
+- Files modified:
+  - apps/ussd/requirements.txt (added `flask-cors==4.0.1`)
+  - apps/ussd/app/main.py (registered flask-cors CORS on the Flask app, restricted via `resources` to only `/simulate` and `/ussd` with `origins: "*"`)
+  - docs/progress/LOG.md, docs/progress/STATUS.md
+- Key decisions made:
+  - SCOPE: CORS added to apps/ussd ONLY (the container a browser page must be able to reach). apps/api (port 8000) is untouched.
+  - flask-cors applied via `CORS(app, resources={...})` with a resource dict so the allow-all-origins config is scoped to exactly the two routes a simulator UI needs (`/simulate`, `/ussd`). `/health` and any future route do NOT get CORS headers. This uses flask-cors's native `*` wildcard — allowed for a dev sandbox because no credentials/cookies are involved (wildcard + allow_credentials=True is invalid in the CORS spec, so credentials are left off).
+  - DEV-ONLY / MUST RESTRICT BEFORE DEPLOYMENT: `origins: "*"` means ANY origin can call these unauthenticated endpoints (see "Known gaps / not done yet"). Before any real deployment the wildcard must be replaced with an explicit origin allow-list (e.g. the production website origin) or CORS removed entirely — logged as a blocker, not silently accepted.
+  - `/health` deliberately excluded from CORS so the readiness probe surface stays as-is; only routes a browser UI actually calls got headers.
+- How to verify it works (verified live against running docker-compose stack; `docker compose up --build -d` rebuilds vetlink_ussd with the new dependency):
+  - `curl -i -H "Origin: http://localhost:5173" "http://localhost:8001/simulate?session_id=cors1&text="` -> 200 with `Access-Control-Allow-Origin: http://localhost:5173` present (flask-cors 4.0.1 reflects the request Origin when one is sent — the `origins: "*"` config makes this a trusted reflection of ANY origin, i.e. genuine allow-all; with NO Origin header it emits `Access-Control-Allow-Origin: *`). ✓
+  - `curl -i -X POST -H "Origin: http://localhost:5173" http://localhost:8001/ussd -d "sessionId=cors1&phoneNumber=%2B254712345678&text="` -> 200 with `Access-Control-Allow-Origin` present. ✓
+  - Preflight: `curl -i -X OPTIONS -H "Origin: http://localhost:5173" -H "Access-Control-Request-Method: POST" "http://localhost:8001/simulate"` -> 200 with `Access-Control-Allow-Origin` + `Access-Control-Allow-Methods` present. ✓
+  - Allow-all confirmed: `curl -i -H "Origin: http://evil.example.com" "http://localhost:8001/simulate?session_id=cors2&text="` -> `Access-Control-Allow-Origin: http://evil.example.com` (reflected — any origin works, as intended for dev). ✓
+  - Negative checks (only /simulate and /ussd are enabled): `/health` with an Origin header -> NO `Access-Control-Allow-Origin`; unknown route `/nope` -> NO `Access-Control-Allow-Origin`. ✓
+- Known gaps / not done yet:
+  - **MUST RESTRICT BEFORE ANY REAL DEPLOYMENT**: CORS is allow-all (`origins: "*"`) on two endpoints that are currently unauthenticated (`/simulate` is the open dev sandbox; `/ussd` webhook has no gateway auth yet). Fine for a localhost-only phone-simulator UI; any exposure beyond localhost requires an origin allow-list and/or removing CORS from /ussd (a real telecom gateway does not need CORS at all).
+  - Real telecom gateway integration + webhook auth/HMAC still a future step (unchanged).
+  - No tests yet (repo-wide gap, unchanged).
+
+## [2026-08-14] Full Cleanup + Comprehensive Documentation Pass (no new features)
+- Model/agent: deepseek-v4-flash-free (opencode)
+- Goal: (a) scan and clean the whole repo (empty files, dead code, build artifacts, stale/duplicate files), (b) live-verify every internal link/connection against the running docker-compose stack and fix anything broken, (c) review the folder tree and move anything misplaced, (d) produce a durable, comprehensive current-state reference a brand-new agent reads FIRST (separate from the session log).
+- Files created:
+  - apps/ussd/.env.example (env-var parity with apps/api; docker-compose ussd service now loads it via env_file)
+  - docs/CURRENT_STATE.md (THE new comprehensive reference doc — real tree, what works, what's stubbed, what's not built, run-from-scratch, honest gaps, next steps)
+  - docs/README.md (docs index: which doc to read in what order)
+- Files modified:
+  - docker-compose.yml (added `env_file: ./apps/ussd/.env.example` to the ussd service — same pattern as the api service; removed the obsolete `version: "3.9"` key that compose v5 warns about)
+  - docs/architecture.md (added a "READ THIS FIRST" pointer to docs/CURRENT_STATE.md at the top; all original vision content preserved)
+  - docs/progress/LOG.md, docs/progress/STATUS.md
+- Cleanup results (exact, nothing assumed):
+  - Empty files (0 bytes): **ZERO found** — nothing to delete.
+  - Empty directories: **ZERO found** — nothing to delete.
+  - Dead/unused code: **NONE found.** Manual review of every module/import/function: all models, schemas, routers, services, core modules, and alembic files are referenced by a live code path (main.py routers, __init__ exports, alembic env metadata import, services called from routers). Conservative rule applied: if unsure, keep + note — nothing was in the "unsure" category this pass.
+  - Leftover build artifacts: **10 `__pycache__` dirs containing 35 `.pyc` files were DELETED.** Confirmed gitignored (root `.gitignore` has `__pycache__/` and `*.py[cod]`) and confirmed NONE were committed/tracked — note: the VetLink254 Software folder has ZERO git-tracked files (the parent repo at /mnt/c/Users/TH tracks other projects; nothing in this project is under version control yet). They regenerate on demand; deletion is cosmetic.
+  - Stale/duplicate files from earlier iterations: **NONE found** in the repo. The old Flask prototype the USSD adapter was rebuilt from lives OUTSIDE the repo (`Downloads/ussd test/`) and was never copied in (already logged in the earlier USSD session) — nothing to remove here.
+  - Folder-tree review: **NOTHING MISPLACED — no files moved.** Structure matches architecture.md Section 7 exactly (apps/api = core, apps/ussd = thin adapter, apps/web = placeholder, docs/, docker-compose.yml at root — the root placement was a deliberate decision logged in the first session). alembic correctly lives under apps/api; .env.example correctly lives per-app. The only structure change was adding apps/ussd/.env.example (documentation parity), which required no import/reference updates.
+- Live verification (all re-run 2026-08-14 against the running stack — vetlink_api, vetlink_ussd, vetlink_postgres, vetlink_redis all Up):
+  - API endpoints re-verified: GET /health ok; full register flow live-tested with a NEW clinic (id 5): create clinic → submit document → verify WITHOUT token = 401 → verify WITH `X-Admin-Token: dev-admin-token-change-me` = 200 `verified` + `unique_code` `VL254-KE-00003` → PATCH lat/lng/services WITH token = 200, WITHOUT token = 401. GET /users, GET /bookings, GET /clinics, GET /clinics/2 all ok. Match endpoint: consultation from downtown → clinic 2 @ ~1.137 km; `VACCINATION` (case-insensitive) matched; `grooming` → `[]`; `limit=1` honored. All match assertions from LOG.md hold.
+  - TEST DATA LEFT IN THE LIVE DB (no DELETE endpoint exists; same pattern as prior sessions): user id 1 ("Cleanup Test Farmer", +254700000001) and clinic id 5 ("Cleanup Verify Clinic", KVB-KE, verified, VL254-KE-00003, lat -1.2663/lng 36.8063, services consultation+vaccination) + its license document. Clinic 5 is matchable and now shows in USSD Westlands results alongside clinic 2.
+  - USSD → apps/api end-to-end re-verified: full `/simulate` walkthrough (Consultation from Westlands) returned the results screen built live from `GET /api/v1/match` (now 2 clinics: the new clinic 5 @ 0.0 km + clinic 2 @ 2.216 km), clinic-details END screen correct; `1*1*00` → END goodbye + Redis key deleted (EXISTS 0); real gateway webhook format `POST /ussd` (sessionId/phoneNumber/text) works. USSD container env confirmed to have NO DATABASE_*/POSTGRES vars and NO psycopg2/sqlalchemy installed — thin-adapter discipline intact.
+  - Imports: every Python module imported successfully inside both containers (`import app.main` etc. in vetlink_api and vetlink_ussd).
+  - Env-var matrix: every env var referenced in code now exists in a .env.example AND docker-compose.yml, with no orphans. Code reads DATABASE_URL/REDIS_URL/ENVIRONMENT/SECRET_KEY/ADMIN_API_TOKEN (api) and API_BASE_URL/REDIS_URL/SESSION_TTL_SECONDS (ussd). apps/api/.env.example had all five; docker-compose api service covers all. The ussd service previously had NO .env.example — added one and wired `env_file` (compose v5 merges env_file into the resolved environment; `environment:` block still takes precedence). POSTGRES_* vars on the postgres service are image-standard and unrelated to app code. `docker compose config` validates clean.
+  - Nothing was found broken, so no business-logic fixes were required in apps/api or apps/ussd.
+- Key decisions made:
+  - NEW DOCS, NOT REWRITE: created `docs/CURRENT_STATE.md` as the durable comprehensive reference instead of rewriting architecture.md's sections. Rationale: architecture.md is the original vision and every LOG.md session references its sections (3.2, 3.4, 3.5, 6, 7, 8, 9) as canonical design decisions; rewriting it risks losing the vision. The new doc is the "current reality" layer and a pointer at the top of architecture.md directs fresh readers to it. docs/README.md gives the read-order. This is the file a brand-new agent reads FIRST, before LOG.md's session-by-session history (per the task's requirement).
+  - Current-state doc generated its folder tree LIVE from the filesystem (post-cleanup `find`), not hand-written, with a one-line purpose comment per meaningful file/folder.
+  - `.env.example` for ussd + `env_file` wiring: chosen to mirror the api service's existing pattern (api has both env_file and an environment block). This was the only compose change that touches runtime config; verified the stack still comes up and all endpoints still respond after `docker compose up -d --no-build`.
+  - Removed the obsolete `version: "3.9"` key from docker-compose.yml — compose v5 emits a deprecation warning for it; it has no functional effect, pure cleanup.
+  - Deleted __pycache__/ .pyc files: safe (gitignored, untracked, regenerable). Logged rather than deleting anything uncertain.
+  - NOT TOUCHED (out of scope, noted only): four EXITED docker containers named `infra-*` (infra-ussd-gateway, infra-core-api, infra-redis, infra-postgres) on this machine. They belong to a different project (an `infra/` stack outside this repo), are already exited, and are not referenced by this repo's docker-compose.yml. Left alone and noted so nobody mistakes them for VetLink254 leftovers.
+- How to verify it works:
+  - Stack up: `docker compose ps` → four `vetlink_*` containers Up.
+  - API health: `curl -s http://localhost:8000/health` → `{"status":"ok"}`; USSD health: `curl -s http://localhost:8001/health` → `{"redis":"connected","status":"ok"}`.
+  - Full API register/verify/match flow + full USSD /simulate walkthrough: exact commands in `docs/CURRENT_STATE.md` §2.6–§2.9 (all re-run this session).
+  - Compose config valid: `docker compose config --quiet`.
+  - Docs render: open `docs/CURRENT_STATE.md`, `docs/README.md`, and the top of `docs/architecture.md`.
+- Known gaps / not done yet:
+  - Unchanged from prior sessions and documented honestly in docs/CURRENT_STATE.md §5: no real auth (shared admin-token stopgap only), no telecom gateway/short code/public HTTPS, CORS allow-all on USSD, only test data (no real clinic onboarding), no security review, no load testing, no wallet/payment decision, zero tests, USSD flow ends read-only with limited animal/service/location lists.
+  - The `infra-*` exited containers on this machine (different project) are not part of this repo; deleting or investigating them is a machine-level decision for the user.
+  - The project folder is still not under version control (nothing in `VetLink254 Software/` is git-tracked). Recommending `git init` inside this folder + initial commit is an explicit next step for the user; not done here because it wasn't requested.
+
+## [2026-08-14] Automated Test Suite (apps/api full + apps/ussd lighter) — pytest, no new features
+- Model/agent: deepseek-v4-flash-free (opencode)
+- Goal: Build an automated pytest suite for apps/api (matching engine, registration service, and all HTTP endpoints via FastAPI TestClient) plus a lighter suite for apps/ussd (menu tree, session store, full find-a-vet flow). No new features, no business-logic changes; any real bug found was to be fixed minimally and logged.
+- Files created:
+  - apps/api/tests/conftest.py (SQLite test DB override via DATABASE_URL env + TestClient + clinic_factory/db_session/admin_headers fixtures)
+  - apps/api/tests/test_matching_engine.py (haversine_km + find_nearest_clinics filters/sort/limit)
+  - apps/api/tests/test_registration_service.py (derive_region_code, generate_unique_code, approve/reject)
+  - apps/api/tests/test_clinics_api.py (create/list/get/404/PATCH auth via TestClient)
+  - apps/api/tests/test_verification_api.py (documents submit/list/404, verify auth, approve issues code, reject stores reason)
+  - apps/api/tests/test_match_api.py (known fixture results, no-match empty list, limit, case-insensitive, 422 validation)
+  - apps/api/tests/test_users_api.py (create/list smoke tests)
+  - apps/api/tests/test_bookings_api.py (create/list smoke tests)
+  - apps/api/pytest.ini (testpaths=tests)
+  - apps/ussd/tests/conftest.py (in-memory MemorySessionStore + FakeApiClient fixtures)
+  - apps/ussd/tests/test_menu_tree.py (node structure, option resolution, dynamic results node, details formatting)
+  - apps/ussd/tests/test_session_store.py (real RedisSessionStore against fakeredis: roundtrip/missing/delete/TTL/corrupt)
+  - apps/ussd/tests/test_ussd_flow.py (full handle_request flow, no-match, api-unavailable, 00 end, back nav, invalid choice)
+  - apps/ussd/pytest.ini (testpaths=tests)
+  - run_tests.sh (repo root — runs BOTH suites in one command via throwaway python:3.11-slim containers; uses a vetlink_pip_cache volume)
+- Files modified:
+  - apps/api/requirements.txt (added pytest==8.2.2, pytest-cov==5.0.0, httpx==0.27.0 — httpx is required by FastAPI's TestClient)
+  - apps/ussd/requirements.txt (added pytest==8.2.2, fakeredis==2.23.2)
+  - apps/api/README.md (added "Tests" section with the exact single run command)
+  - apps/ussd/README.md (added "Tests" section with the exact single run command)
+  - docs/progress/LOG.md, docs/progress/STATUS.md, docs/CURRENT_STATE.md
+- Key decisions made:
+  - TEST DB = SQLITE, NOT a test Postgres. Rationale: tests must run WITHOUT the docker-compose stack and without a database server; SQLite needs no external service. The API's DATABASE_URL env var is overridden in tests/conftest.py to a temp file-based SQLite db BEFORE app modules are imported (config.py reads DATABASE_URL at import). File-based (not :memory:) so the TestClient's worker thread and the test thread both reach the same data. Behavior differences vs Postgres logged explicitly: (1) SQLAlchemy JSON columns work on SQLite (stored as TEXT, transparent round-trip — verified), but JSON-typed WHERE clauses would differ; matching does its service filtering in Python so this never matters here; (2) DateTime(timezone=True) columns come back as NAIVE datetimes on SQLite (Postgres returns tz-aware) — harmless for these response-serialization tests; (3) the COUNT-based unique_code sequence is per-DB, so tests start from a clean sequence because every table is emptied before each test. If geospatial/JSON SQL queries or strict tz semantics are ever tested, a test Postgres (e.g. via testcontainers) should be adopted instead.
+  - TEST RUNNER = throwaway `python:3.11-slim` container (matches both production Dockerfiles), NOT a local venv and NOT docker-compose. The only local Python on this machine is 3.14, which cannot install the pinned pydantic 2.7.4/psycopg2 2.9.9 (no cp314 wheels). Running pytest in a python:3.11 container tests the exact pinned dependency set. Documented single command per app in each README, plus `./run_tests.sh` at the repo root for everything.
+  - test deps ADDED TO requirements.txt per the task instruction. Consequence (logged honestly): pytest/httpx etc. now install in the production image — slight bloat; a future split into requirements-dev.txt is noted.
+  - USSD tests use BOTH an in-memory session store AND fakeredis: full flow tests patch app.main.session_store with a MemorySessionStore stand-in and app.main.api_client with a FakeApiClient (never touches HTTP); the real RedisSessionStore is tested against `fakeredis.FakeRedis` (store._client swapped) to prove load/save/delete/TTL/key-namespace behavior without a Redis server. fakeredis==2.23.2 chosen (tiny, no server, realistic TTL/serialization). No Redis, no live apps/api needed anywhere.
+  - Matching engine tests use a real SQLite session (not a mock) so the DB-level verification_status filter is exercised end-to-end; haversine_km is tested against independent known distances (1° of latitude ≈ 111.195 km; London→Paris ≈ 343.5 km; and the live-verified downtown-Nairobi→PetCare fixture ≈ 1.137 km).
+  - 3 initial test failures were BAD TEST EXPECTATIONS, not app bugs (see below) — no business logic was changed anywhere. No "BUG FOUND AND FIXED" entries this session.
+  - COVERAGE_FILE=/tmp/.coverage in the API run command: the default .coverage write to a Windows/WSL host mount hung, so coverage data is written inside the container.
+- How to verify it works (both suites green, no docker-compose needed; verified live in python:3.11-slim containers on 2026-08-14):
+  - Everything: `./run_tests.sh` from the repo root → apps/api: 55 passed, coverage 408 stmts / 99%; apps/ussd: 24 passed.
+  - apps/api alone: `cd apps/api && docker run --rm -v "$PWD":/app -w /app -e COVERAGE_FILE=/tmp/.coverage -e PYTHONDONTWRITEBYTECODE=1 python:3.11-slim sh -c "pip install --quiet -r requirements.txt && python -m pytest tests/ -p no:cacheprovider --cov=app --cov-report=term-missing"`
+  - apps/ussd alone: `cd apps/ussd && docker run --rm -v "$PWD":/app -w /app -e PYTHONDONTWRITEBYTECODE=1 python:3.11-slim sh -c "pip install --quiet -r requirements.txt && python -m pytest tests/ -p no:cacheprovider"`
+- Initial-failure analysis (all bad tests, fixed in the tests only):
+  - test_match_api no-match: my seed data included a clinic offering "grooming", so querying grooming legitimately returned it — switched the no-match query to "boarding" (offered by nobody).
+  - derive_region_code("KVB-KE-") returned "KE" (trailing empty part is filtered) — my expectation of "XX" was wrong; corrected the test and added a dedicated trailing-dash test documenting the real behavior.
+  - USSD clinic-details assertion expected "Nairobi / Westlands" but the real screen renders "County: Nairobi / Sub-county: Westlands" — fixed the assertion.
+- Known gaps / not done yet:
+  - No CI pipeline (.github/workflows) — run_tests.sh is local-only; wiring it into CI is a future step.
+  - USSD suite is deliberately lighter than the API suite: it covers menu_tree + session store + the find-a-vet flow logic, but NOT the Flask HTTP layer (/ussd, /simulate, /health routes), CORS headers, or redis-connection-failure error paths at the route level.
+  - No docker-compose integration test (compose up + health checks) — still manual via docs/CURRENT_STATE.md §6.
+  - No tests for alembic migrations themselves, concurrency-safety of the unique-code generator (already a logged known gap), or load/performance.
+  - No tests for apps/web (placeholder app, nothing to test yet).
+  - Test deps live in the production requirements.txt (bloat); splitting into requirements-dev.txt is noted as future cleanup.
+  - Machine-specific note: the run commands use Docker because the pinned deps won't install on the local Python 3.14; on a machine with Python 3.11/3.12 a venv + `pip install -r requirements.txt && pytest` works too.
+
+## [2026-08-15] KVB Verification Bridge ("Verify a vet") — API + USSD, STUB only
+- Model/agent: deepseek-v4-flash-free (opencode)
+- Goal: Per new KVB-leader context, build the correctly-shaped integration point for KVB vet-license verification (VetLink254 is a B2C bridge calling OUT to KVB, NOT the licensing authority), proven end-to-end against a temporary stub, and correct any code/docs that conflated VetLink254's own clinic onboarding with vet licensing or assumed a private M-Pesa paybill as the only payment path.
+- Files created:
+  - apps/api/app/integrations/__init__.py (package marker — external providers behind clean interfaces)
+  - apps/api/app/integrations/kvb_client.py (KVBVerificationClient.verify_license() — stub mode + OAuth2 real-mode + per-session Redis cache; KVBVerificationError / KVBNotFoundError)
+  - apps/api/app/schemas/kvb.py (VetVerificationResult: status/name/license_type/checked_at)
+  - apps/api/app/api/v1/kvb.py (GET /api/v1/verify-license — public, no admin token)
+  - apps/api/tests/test_kvb_client.py (stub active/expired/not-found, stub WARNING log, cache hit/disable/degradation, real-mode OAuth2 via httpx.MockTransport)
+  - apps/api/tests/test_verify_license_api.py (endpoint: active/expired/404/422/502, no-admin-token)
+  - apps/ussd/tests/test_verify_vet_flow.py (full verify-a-vet flow: welcome option, prompt, active/expired/not-found/api-down END screens, back, session cleared)
+- Files modified:
+  - apps/api/app/config.py (KVB_API_BASE_URL / KVB_CLIENT_ID / KVB_CLIENT_SECRET / KVB_CACHE_TTL_SECONDS — stub default, dev placeholders)
+  - apps/api/app/requirements.txt (added redis==5.0.7 — the API previously never used Redis; logged, not silent)
+  - apps/api/app/.env.example (KVB vars + comments)
+  - apps/api/app/main.py (register kvb router)
+  - apps/api/app/schemas/__init__.py (export VetVerificationResult)
+  - apps/api/app/services/registration_service.py, app/api/v1/verification.py, app/models/clinic.py (header comments logging the concept distinction)
+  - apps/api/tests/conftest.py (KVB_API_BASE_URL=stub, KVB_CACHE_TTL_SECONDS=0 for deterministic, Redis-free tests)
+  - docker-compose.yml (api service KVB env vars)
+  - apps/ussd/app/menu_tree.py (Welcome option 2 → verify_license free_text node → verify_license_result terminal node; MenuNode.free_text field)
+  - apps/ussd/app/api_client.py (verify_license() + LicenseNotFoundError)
+  - apps/ussd/app/main.py (_enter_verify_license + free-text branch in handle_choice — follows the existing dynamic-node pattern, no hardcoded if/else tree)
+  - apps/ussd/tests/conftest.py (FakeApiClient.verify_license + verify_error; factory extended)
+  - apps/ussd/tests/test_menu_tree.py (node set + welcome options + new verify nodes + result formatting)
+  - docs/CURRENT_STATE.md, docs/architecture.md, docs/progress/STATUS.md, docs/progress/LOG.md
+- Key decisions made:
+  - KVB IS THE LICENSING AUTHORITY; VetLink254 is a B2C bridge. The internal clinic KYC flow (verifying_authority, POST /clinics/{id}/verify, registration_service) is VetLink254's OWN onboarding and stays — it is NOT KVB license verification. The two concepts are deliberately separate: a clinic being "verified" on VetLink254 != a named vet holding an active KVB license. Distinction logged clearly in code headers and architecture.md §3.5; never merged into one field/endpoint.
+  - STUB-FIRST, SWAPPABLE INTERFACE: KVB has no public API yet (MMS at mms.kenyavetboard.or.ke), so KVBVerificationClient has ONE method verify_license(license_number)->{status,name,license_type} and runs in STUB mode by default (KVB_API_BASE_URL unset/"stub") with an in-memory dict of fake licenses (KVB-1001/1002 active, KVB-1003 expired, else not-found). Every stub call logs a WARNING so it can never look real. Real mode = OAuth2 client-credentials (KVB_CLIENT_ID/SECRET, dev placeholders clearly commented) → POST {base}/oauth/token → GET {base}/api/v1/verify/{license_number}. The real endpoint SHAPES are an assumed contract to be confirmed against KVB's docs when they exist; swapping in the real URL+credentials is a drop-in, no other code changes.
+  - CACHING (per KVB leader guidance): successful results cached in Redis for 180s (KVB_CACHE_TTL_SECONDS), deliberately matching the 180s USSD session TTL so a cached status can never outlive the session it was fetched in — every new session re-checks live. NEVER persisted to Postgres. Cache lives INSIDE kvb_client.py (verify_license wraps _fetch) so callers can't bypass it; TTL<=0 disables it (tests set 0). Redis unreachable → WARNING + degrade to uncached call (endpoint still works; no Postgres involvement).
+  - PUBLIC ENDPOINT (logged decision): GET /api/v1/verify-license is a farmer-facing read-only lookup → deliberately NO admin X-Admin-Token (unlike clinic verify/PATCH). It reports KVB's own status ('active'/'expired'/...) via 200, unknown number → 404, KVB/upstream failure → 502. Not-found vs outage are distinguished so the USSD adapter can show "not verified" vs "Service temporarily unavailable".
+  - USSD free-text input handled DECLARATIVELY: new MenuNode.free_text flag + a verify_license/verify_license_result node pair in menu_tree.py; main.py routes typed text to _enter_verify_license following the same pattern as the existing dynamic results node. Thin adapter unchanged: USSD only forwards the number to apps/api and renders the answer (LicenseNotFoundError is just apps/api's 404 re-raised; no KVB logic in the adapter).
+  - PAYMENT PATH CORRECTION: docs now state the wallet/M-Pesa architecture is the FARMER→CLINIC payment path (separate, still-undecided), and that any KVB-related levy would route via Pesaflow/eCitizen + *222# USSD under a government agreement — never a private paybill (architecture.md §3.6/§8, CURRENT_STATE §4/§5.11). Nothing deleted.
+  - redis==5.0.7 added to apps/api/requirements.txt (first Redis use in the API; docker-compose api already had REDIS_URL). No other new deps (httpx already present).
+- How to verify it works (all commands below need the docker-compose stack OR the local venv; the STUB is in effect because KVB_API_BASE_URL defaults to "stub"):
+  - API: `curl -s "http://localhost:8000/api/v1/verify-license?license_number=KVB-1001"` -> {"status":"active","name":"Dr. Wanjiku Kamau","license_type":"Veterinary Surgeon","checked_at":...}; KVB-1003 -> "expired"; KVB-9999 -> HTTP 404.
+  - USSD: `curl -s "http://localhost:8001/simulate?session_id=verify1&text="` (CON Welcome with 2. Verify a vet), then `text=2`, then `text=2*KVB-1001` -> END "Dr. Wanjiku Kamau is a VERIFIED KVB Veterinary Surgeon."
+  - Tests: `./run_tests.sh` from repo root (API 74, USSD 34 — expected). NOTE: Docker was NOT available in this WSL distro this session, so tests were run in a local Python 3.14 venv with UNPINNED latest deps instead: `python -m pytest tests/ -p no:cacheprovider --cov=app` in apps/api (74 passed, 97% coverage) and `python -m pytest tests/ -p no:cacheprovider` in apps/ussd (34 passed). The pinned python:3.11-slim container run must be re-verified when Docker works.
+- Known gaps / not done yet:
+  - REAL KVB INTEGRATION IS EXTERNALLY BLOCKED (not a coding gap): KVB must expose a REST API (their IT department + formal data-sharing agreement under the Data Protection Act 2019); any payment levy additionally needs a Pesaflow/eCitizen integration agreement. The stub is temporary and logs WARNINGs until then.
+  - Real-mode endpoint shapes (oauth/token, /api/v1/verify/{n}) are ASSUMED; must be confirmed against KVB's actual API docs when they exist — the verify_license() interface itself shouldn't change.
+  - OAuth2 token is fetched per call (no token caching/refresh); fine at stub-first scale, revisit with real KVB volume.
+  - USSD "Verify a vet" ends at a read-only status END screen — no booking action yet (future scope, deliberately not built).
+  - Edge: a free-text license number equal to "0", "00" or "000" is consumed as back/end (menu-wide USSD convention) — real KVB numbers don't collide with those; logged for awareness.
+  - Pinned-deps container run (./run_tests.sh) still to re-verify on a Docker-enabled machine (this session used a 3.14 venv fallback).
+
+## [2026-08-16] National/USSD expansion: 47-county search, ~24-service catalogue w/ pagination, EN/SW bilingual, SMS notifications (farmer + board stopgap)
+- Model/agent: deepseek-v4-flash-free (opencode)
+- Goal: Replace the shallow 4-neighborhood/3-service/English-only USSD menu with a national East-Africa-grade flow — type-to-search county selection over all 47 Kenya counties, a ~24-service paginated catalogue with free-text custom-service entry, a first-screen English/Kiswahili language choice with full bilingual prompts, and SMS notifications (Africa's Talking) to the farmer + a board-lookup summary, all wired through the thin-adapter discipline.
+- Files created:
+  - apps/api/app/integrations/sms_client.py (SMSClient.send_sms(phone, message) -> bool — Africa's Talking REST; STUB/no-op mode when AT_USERNAME/AT_API_KEY unset, logs WARNING, never raises; httpx, no new dep)
+  - apps/api/app/api/v1/notify.py (POST /api/v1/notify — SMS dispatch for the USSD adapter; events "match" (farmer SMS) + "verify" (farmer SMS + board SMS stopgap))
+  - apps/api/tests/test_sms_client.py (stub mode never-sends + WARNING log; live HTTP path via httpx.MockTransport, 500/unreachable -> False)
+  - apps/api/tests/test_notify_api.py (stub-mode endpoint no-crash/sent=False; fake-client dispatch: match->farmer only, verify->farmer+board, messages content)
+- Files modified:
+  - apps/ussd/app/menu_tree.py (REWRITE: LANGUAGES; ANIMALS kept; SERVICES expanded to 24 w/ per-service sw label; COUNTIES = all 47 with APPROXIMATE CENTROID coords; search_counties(); TRANSLATIONS EN/SW + translate(); MenuNode.prompt_key / MenuOption.label_key+page; dynamic build_service_node/build_county_matches_node; sub_location + custom_service nodes; results back now "sub_location")
+  - apps/ussd/app/main.py (language-first new sessions; FREE_TEXT_HANDLERS dispatch for county_search/sub_location/custom_service/verify_license; "#" page navigation + service-page reset on back; translated render/back/end/goodbye/invalid/no-match/service_unavailable; notify() fire-and-forget on successful match + verify)
+  - apps/ussd/app/api_client.py (added notify(event, phone, context) -> POST /api/v1/notify — USSD never touches SMS directly)
+  - apps/api/app/config.py (AT_USERNAME/AT_API_KEY/AT_SENDER_ID/AT_SMS_BASE_URL/BOARD_NOTIFICATION_PHONE, all default "" — stub)
+  - apps/api/app/main.py (register notify router)
+  - apps/api/.env.example, docker-compose.yml (AT_* + BOARD_NOTIFICATION_PHONE env)
+  - apps/ussd/tests/conftest.py (FakeApiClient.notify; factory unchanged), test_menu_tree.py (REWRITE: new node set, 47-county assertions, county-search filtering, pagination, county-matches, bilingual translate/clinic-details, custom service), test_ussd_flow.py (full new find-a-vet flow w/ county search + sub-location, pagination tests, custom-service flag test, EN/SW flows), test_verify_vet_flow.py (language-first nav + notify assertion)
+  - docs/CURRENT_STATE.md, docs/progress/STATUS.md (below)
+- Key decisions made:
+  - HARD CONSTRAINT RESPECTED: USSD has NO GPS (telecom protocol limitation) — the location step is the USSD-native type-to-search pattern: farmer types letters -> case-insensitive county-name filter -> up to 9 numbered matches (0 matches => clear retry; >9 => first 9 + "type more letters to narrow"). No device-location read is pretended.
+  - COUNTY COORDINATES ARE APPROXIMATE CENTROIDS (documented approximation, logged limitation, NOT a bug): no geocoding infra / no paid geocoding key, so each county carries a hardcoded approximate centroid used purely as the match endpoint's lat/lng; the farmer's free-text sub-location ("Kilimani", "Ruiru town") is stored as TEXT on context and NOT geocoded — matching uses the county centroid until real geocoding is built.
+  - SERVICE CATALOGUE = 24 items from the PetCare business plan (architecture.md §3): consultation, vaccination, deworming & tick/flea, minor/major surgery, emergency/mobile visit, grooming, boarding, dog/pet training, breeding, pet sales, adoption, lab tests, nutrition, dental, castration/spaying, hoof care, microchipping, ultrasound/imaging, farm health visit, bulk drug purchase, post-surgery care, pregnancy/whelping, euthanasia/cremation. Paginated 9/page with the existing menu conventions (1-9 + "0. Back" + "00. End") plus NEW "#. More options"; the LAST page's "#" leads to free-text custom-service entry stored verbatim and FLAGGED context["is_custom_service"]=True (uncatalogued — review later). Canonical values = the English catalogue names (matched case-insensitively against clinic `services`); Clinic model `services` JSON needs NO structural change.
+  - LANGUAGE FIRST: "1. English 2. Kiswahili" is the very first screen (bilingual by construction); choice stored as context["language"] for the whole session. All prompts/labels have EN (canonical) + SW translations in TRANSLATIONS. Technical-term SW phrasing flagged inline with TODO-SW comments for a native-speaker review later; nothing invented.
+  - SMS CLIENT STUB-SAFE (mirrors kvb_client pattern): Africa's Talking REST via httpx (already pinned — NO new dependency; logged the choice: REST endpoint over their SDK to avoid a new dep). AT_USERNAME/AT_API_KEY unset (dev default) => WARNING + no-op, returns False — a missing SMS config can NEVER break the booking/verify flow. Env to set for real SMS: AT_USERNAME + AT_API_KEY (+ optional AT_SENDER_ID / AT_SMS_BASE_URL).
+  - THIN-ADAPTER DISCIPLINE KEPT: apps/ussd never touches SMS/Africa's Talking — it POSTs a new apps/api endpoint /api/v1/notify (public, no admin token, logged) with event+phone+context; the API builds the SMS text, sends farmer SMS (match: clinic name/distance/unique code; verify: the result they just saw) and the board stopgap SMS.
+  - BOARD SMS IS A DOCUMENTED STOPGAP: BOARD_NOTIFICATION_PHONE receives a short summary on every vet-verification lookup (license number, timestamp, caller phone — no extra farmer personal data). This mirrors the real KVB board workflow's need for lookup-volume visibility but is explicitly a minimal SMS stand-in for the board/reporting layer (architecture.md §3.8 / CURRENT_STATE.md §4 "not built yet") — NOT the real thing.
+  - notify() is fire-and-forget from the adapter's side (ApiClientError caught + logged; the flow continues); the API endpoint never raises for SMS-config reasons.
+- How to verify it works (note: Docker was NOT available in this WSL distro this session, so ./run_tests.sh's pinned 3.11-slim container run could NOT be executed — the suites were run in a local Python 3.14 venv with unpinned latest deps instead, same fallback as the 2026-08-15 session):
+  - apps/ussd: `python -m pytest tests/` -> 57 passed. apps/api: `python -m pytest tests/` -> 87 passed. (Counts up from 34/74.)
+  - USSD walkthrough (simulate, accumulated text): "" -> language; "1" -> Welcome (EN); "1" -> animal; "1" -> service "Page 1/3"; "1" -> "Type part of your county name"; "nai" -> "1. Nairobi"; "1" -> "Enter your area / town name"; "Ruiru town" -> results; "1" -> clinic details END. Services: "1*1*1*#" -> Page 2/3, "#" again -> Page 3/3, "#" again -> custom-service prompt. SW: start with "2" for Karibu VetLink254.
+  - API: `curl -X POST http://localhost:8000/api/v1/notify -H "Content-Type: application/json" -d '{"event":"match","phone":"+254700000001","context":{"clinic_name":"PetCare","distance_km":2.216,"unique_code":"VL254-KE-00002","service":"Consultation","county":"Nairobi"}}'` -> {"event":"match","farmer_sms_sent":false,"board_sms_sent":false,"mode":"stub"} until AT creds are set.
+- Known gaps / not done yet:
+  - County coords are APPROXIMATE CENTROIDS and sub-locations are not geocoded — matching uses the county centroid until real geocoding is built (CURRENT_STATE §4/§5.10). No web location picker (deliberately out of scope: needs a website + maps budget).
+  - SMS is STUB/no-op until AT_USERNAME + AT_API_KEY are set; the board SMS is a STOPGAP for the not-yet-built reporting layer. No SMS delivery is testable end-to-end without a real Africa's Talking account.
+  - Kiswahili translations are best-effort; technical terms flagged TODO-SW for native-speaker review.
+  - USSD suite still doesn't exercise the Flask HTTP layer (/ussd, /simulate, CORS, redis-failure) — unchanged known gap.
+  - Pinned-deps container run still to re-verify on a Docker-enabled machine.
+
+## [2026-08-18] USSD nav rework (0/00), county-search & pagination overhaul, bilingual, real AT SDK SMS, KVB contract doc, cleanup
+- Model/agent: opencode/deepseek-v4-flash-free
+- Goal: Implement the 10-part USSD + SMS + docs rework: new "0"/"00" navigation semantics, unrestricted county search with shared continuous pagination, optional sub-location, 24-service catalogue with continuous-numbered pages + free-text custom service, bilingual EN/SW screens, real Africa's Talking SMS via the official SDK wired into KYC submit/approve/reject/match/verify + board stopgaps, a KVB integration contract doc, and a repo-wide dead-code pass with full test + doc updates.
+- Files created:
+  - docs/KVB_INTEGRATION.md (the agreed contract between VetLink254 and KVB's license-verification API: assumed OAuth2 client-credentials token endpoint, GET {base}/api/v1/verify/{license_number} lookup shape, error mapping, per-session Redis cache rules, stub dataset, config-only go-live checklist)
+  - apps/api/alembic/versions/003_verification_contact_phone.py (adds verification_documents.contact_phone)
+- Files modified:
+  - apps/ussd/app/menu_tree.py (SERVICES_PER_PAGE/COUNTY_MATCHES_MAX -> shared PAGE_SIZE=9 + NEXT_PAGE_KEY="98"; MenuNode.page_key; sub_location gained a "9. Skip" option; service/county_matches node page_key; new unified build_paginated_node with CONTINUOUS numbering across pages + last-page free-text custom-service entry; EN/SW strings updated: welcome "(Home)/(Nyumbani)", new prompt_sub_location "Type your area, or reply 9 to skip:", new home/skip keys, county_narrow removed)
+  - apps/ussd/app/main.py ("00"/"000" is now CONTEXT-DEPENDENT: on welcome it ENDS the session, on any other screen it jumps home WITHOUT ending the session, resetting flow context but keeping language (new _reset_flow_context); "0" back resets the current node's page_key; "98" next-page advances via context[node.page_key]; page advance no longer hardcoded to service_page; footer rule: "0. Back" only when node.back, "00. End" only on welcome, else "00. Home"; county-search free text allows 1+ letters and resets county_matches_page; custom service now flagged context["custom_service"]=True; sub-location docstring logs the county-centroid approximation)
+  - apps/api/app/integrations/sms_client.py (REWRITE: official africastalking SDK pinned 2.0.3; format_kenyan_phone(); _masked/_safe_recipient for log-safe numbers; injectable sdk for tests; module-level sms_client singleton + send_sms/send_sms_async/send_sms_async_many helpers)
+  - apps/api/app/api/v1/notify.py (async endpoint; uses send_sms_async / send_sms_async_many so the blocking SDK calls run in a threadpool and the farmer+board texts on a verify go out IN PARALLEL; message builders unchanged)
+  - apps/api/app/api/v1/verification.py (submit_document stores contact_phone and fire-and-forget SMSs a receipt to the farmer + a board notification with the CLINIC NAME only; verify_clinic SMSs the decision + unique code to the latest document's contact_phone and the board)
+  - apps/api/app/api/v1/kvb.py (GET /verify-license now sends a fire-and-forget board SMS per lookup via notify_board param, default true)
+  - apps/api/app/config.py, .env.example, docker-compose.yml (removed AT_SMS_BASE_URL — dead config now the SDK hardcodes its base URL; added sandbox-convention comment)
+  - apps/api/requirements.txt (pinned africastalking==2.0.3)
+  - apps/api/app/models/verification_document.py, apps/api/app/schemas/verification.py (contact_phone column + optional schema field/response)
+  - apps/api/tests/test_sms_client.py (REWRITE for SDK-backed client: FakeSDK/FakeSMSService injection, format_kenyan_phone normalization, masking, stub-mode never-sends, SDK error swallowing), test_verify_license_api.py (board-SMS per lookup + notify_board=false + unset-phone cases), test_verification_api.py (contact_phone stored; farmer+board SMS on submit and on approve/reject; board SMS never contains farmer phone; SMS failure never breaks submit), test_registration_service.py / test_verify_license_api.py (removed unused pytest import)
+  - apps/ussd/tests/test_menu_tree.py (REWRITE for PAGE_SIZE/NEXT_PAGE_KEY, continuous numbering across pages, county-search no-length-restriction + narrowing + pagination, sub-location skip, new home/skip translations, welcome "(Home)" label), test_ussd_flow.py (REWRITE: Home-vs-End 00 semantics incl. mid-flow reset keeping language + 000; county 1-letter search + page-2 selection by continuous number; service continuous numbering via 98 + page-3 custom service flag; optional sub-location skip via 9 + SW "jibu 9 kuruka"; SW full flow), test_ussd_flow.py (unused fake assignment removed)
+- Key decisions made:
+  - "00" IS CONTEXT-DEPENDENT (Part 1): on the welcome/home screen it ENDS the session (session deleted); on ANY other screen it jumps straight to home WITHOUT ending the session, resetting in-progress selections but keeping context["language"]. "000" behaves identically. This lets a farmer bail out mid-flow without losing the session identity.
+  - FOOTER RULE (Part 1): "0. Back" appears only when a node actually has a back target (node.back); "00. End" appears ONLY on the welcome/home screen (nothing to go home to from home); every other screen shows "00. Home". The language screen has NO "0. Back" (nothing before it) but shows "00. Home" — logged edge case: pressing "00" on the language screen with no language yet jumps home in English.
+  - COUNTY SEARCH (Part 2): NO fixed input-length restriction — 1 letter to the full name is valid; case-insensitive substring filter. Zero matches => clear retry message staying on the node. Overflow uses the SAME continuous-numbering pagination as services.
+  - PAGINATION DESIGN RULE (Part 4): shared PAGE_SIZE=9 and NEXT_PAGE_KEY="98" for both service and county lists; item numbers are CONTINUOUS across pages (page 2 of services = 10-18, page 3 = 19-24 + "25. Type a service not listed"). "98" is reserved and must never collide with an item number — total items per list must stay well under 90 (design rule logged here; currently 24 services + 47 counties).
+  - FREE-TEXT CUSTOM SERVICE (Part 4): the LAST numbered entry on the service catalogue's final page leads to a free-text node; the typed text is stored as context["service"] AND flagged context["custom_service"]=True (renamed from the old is_custom_service) so catalogue vs free-text matches are distinguishable for future admin review.
+  - OPTIONAL SUB-LOCATION (Part 3): prompt is "Type your area, or reply 9 to skip:"; the "9" is a REAL MENU OPTION (next=results, value=None) so nothing is stored when skipped. Matching STILL uses the COUNTY CENTROID regardless of sub-location (pre-existing documented approximation, now logged explicitly in the handler docstring) — the text is kept on context only for the farmer's record.
+  - SMS VIA OFFICIAL SDK (Part 6): switched from hand-rolled httpx REST to africastalking==2.0.3 (PINNED). The SDK hardcodes its base URLs and auto-routes to api.sandbox.africastalking.com when username=="sandbox", so AT_SMS_BASE_URL is DEAD CONFIG and was removed everywhere. The SDK validates phones with ^\+\d{1,3}\d{3,}$ (ValueError) and raises AfricasTalkingException on non-2xx — so ALL callers route through format_kenyan_phone() first and every exception is swallowed to a log (SMS never breaks a flow). format_kenyan_phone + _masked/_safe_recipient were folded INTO sms_client.py (task allowed either location; logged which).
+  - THREADING (Part 6): DB-touching handlers (verification, kvb) stay sync `def` — FastAPI already runs them in a threadpool. /notify is now `async def` and uses run_in_threadpool-backed send_sms_async / send_sms_async_many so the farmer + board texts on a verify event go out IN PARALLEL.
+  - KYC SMS WIRING (Parts 14a/14c): submit_document SMSs the farmer a receipt (contact_phone) AND the board a notification with the CLINIC NAME ONLY (never the farmer phone). verify_clinic SMSs the decision + unique_code to the latest document's contact_phone AND the board. contact_phone is optional on VerificationDocumentCreate (migration 003) so a missing phone never blocks submission.
+  - VERIFY-LICENSE BOARD SMS (Part 15): GET /api/v1/verify-license sends a board SMS on EACH lookup via a notify_board query param (default true, gated by BOARD_NOTIFICATION_PHONE). REDUNDANCY LOGGED: the USSD adapter also asks /notify ("verify" event) to SMS the board after a completed flow, so the board can get two texts per verification — both documented stopgaps until the real board/reporting layer exists.
+  - KVB CONTRACT DOC (Part 7): new docs/KVB_INTEGRATION.md captures the assumed KVB API contract (OAuth2 client-credentials token endpoint, GET {base}/api/v1/verify/{license}, error mapping, per-session cache, stub dataset, config-only go-live checklist) so going live is a config change once KVB exposes a public API.
+  - DEAD-CODE PASS (Part 8): no empty files; no dead/unreferenced files (apps/web/ is a documented future placeholder, kept); no stale references to removed symbols (AT_SMS_BASE_URL, county_narrow, SERVICES_PER_PAGE, COUNTY_MATCHES_MAX, is_custom_service) in code; removed 2 unused pytest imports in api tests and 1 unused local in ussd tests. __pycache__ dirs are gitignored build artifacts.
+- How to verify it works (Docker NOT available this session — suites ran in a local Python 3.14 venv with unpinned deps, same fallback as prior sessions; the venv lives at /tmp/opencode/vl254-venv):
+  - apps/ussd: `cd apps/ussd && python -m pytest tests/` -> 73 passed (up from 57).
+  - apps/api: `cd apps/api && python -m pytest tests/` -> 114 passed (up from 87).
+  - USSD walkthrough (simulate, accumulated text): "" -> language; "1" -> "Welcome to VetLink254 (Home)" footer "00. End"; "1" -> animal; "1" -> service "Page 1/3"; "98" -> Page 2/3 ("10." ... "18."), "98" -> Page 3/3 ("25. Type a service not listed"); "1" -> county search; "a" -> county matches page 1, "a*98" -> page 2, "a*98*10" -> select by continuous number; "1" -> "Type your area, or reply 9 to skip:"; "9" -> results (no sub-location stored); "00" from ANY non-welcome screen -> back home with session alive; "00" on home -> "END ... Goodbye!". SW: start with "2".
+  - API: POST /api/v1/clinics/{id}/documents with contact_phone -> 201 + SMS receipt; POST /api/v1/clinics/{id}/verify (admin) -> decision SMS; GET /api/v1/verify-license?license_number=KVB-1001 -> 200 + board SMS when BOARD_NOTIFICATION_PHONE set (notify_board=false disables); POST /api/v1/notify -> stub mode until AT creds set.
+- Known gaps / not done yet:
+  - SMS is STUB/no-op until AT_USERNAME + AT_API_KEY are set; username "sandbox" routes to the AT sandbox automatically. No delivery is testable end-to-end without a real Africa's Talking account.
+  - Board gets two SMS per verification (verify-license + /notify) until the real reporting layer is built — documented redundancy, not a bug.
+  - Kiswahili translations are best-effort; technical terms flagged TODO-SW for native-speaker review.
+  - County coords remain APPROXIMATE CENTROIDS; sub-locations are stored as text, not geocoded (matching uses the county centroid).
+  - Pinned-deps container run (./run_tests.sh) still to re-verify on a Docker-enabled machine; also needs a real Postgres for migration 003 in dev.
+
+## [2026-08-20] DEMO-READINESS PASS (PARTS 1–8): Render config, minimal JWT auth, R2/local KYC storage, public dashboard, CI, clean git push
+- Model/agent: opencode/deepseek-v4-flash-free
+- Goal: Move VetLink254 from "runs locally via Docker/ngrok" to "reachable at a real HTTPS domain with real SMS, real USSD short code, minimal real auth, real file storage for KYC docs, and a minimal public dashboard" — demo-readiness for an investor/partner demo, NOT full production hardening. External credentials (Africa's Talking, Render account, Cloudflare R2, real domain/short code) were NOT yet available this session, so every piece that needs them is built code-complete and explicitly marked "code complete, not yet live-verified — pending <credential>" (never claimed live). The full LOCAL demo walkthrough was re-run end to end after the changes and still works (constraint #2 — that flow is what gets shown tomorrow).
+- Files created:
+  - apps/api/app/core/security.py (REWRITE: minimal JWT auth — bcrypt hash/verify, PyJWT HS256 create/decode, get_current_admin dependency, ensure_admin_user env seeding; replaces the X-Admin-Token stopgap)
+  - apps/api/app/api/v1/auth.py (POST /api/v1/auth/login -> Bearer JWT for the seeded admin)
+  - apps/api/app/schemas/auth.py (AuthLogin / TokenResponse)
+  - apps/api/scripts/create_admin.py (idempotent env-var admin seeding; run by docker-compose api start command + Render release command)
+  - apps/api/alembic/versions/004_admin_auth.py (adds users.password_hash)
+  - apps/api/app/integrations/storage_client.py (PART 4: StorageClient with R2StorageClient (boto3) + LocalStorageClient fallback; ALLOWED_DOC_TYPES images+PDF; 10MB cap)
+  - apps/api/tests/test_auth.py (login ok/wrong/unknown/non-admin; verify+PATCH no/bad JWT -> 401, valid JWT -> 200; non-admin token -> 403)
+  - apps/api/tests/test_storage_client.py (allowlist, 10MB default, LocalStorageClient real disk writes + URL + unique keys + basename sanitise, R2 via fake boto3 client + failure->StorageError, r2_configured selection)
+  - apps/web/index.html, style.css, app.js, Dockerfile (PART 5: public read-only verified-clinics dashboard, plain HTML/CSS/JS, no build step)
+  - render.yaml (PART 1: Render Blueprint — api web service with releaseCommand `alembic upgrade head && python -m scripts.create_admin`, ussd web service, static_site web, managed Postgres + Redis; secrets sync:false)
+  - .github/workflows/ci.yml (PART 6: runs ./run_tests.sh + docker build of all three images on push/PR)
+  - README.md (root, PART 8 — see bottom of this entry)
+- Files modified:
+  - apps/api/app/config.py (removed ADMIN_API_TOKEN; added ADMIN_EMAIL/ADMIN_PASSWORD/ACCESS_TOKEN_EXPIRE_MINUTES/CORS_ORIGINS/R2_*/LOCAL_UPLOAD_DIR/DOC_UPLOAD_MAX_MB; SECRET_KEY dev default lengthened to >=32 bytes for HS256)
+  - apps/api/app/main.py (registered auth router; added CORS middleware (CORS_ORIGINS, dev default "*"); mounted /uploads StaticFiles for local KYC storage; REMOVED the create_all startup event — Alembic is the sole schema mechanism now)
+  - apps/api/app/api/v1/verification.py (submit_document now a MULTIPART FILE UPLOAD — file/doc_type/contact_phone form fields, 415 on bad MIME, 413 over 10MB, empty->400, storage failure->500, object URL stored in file_url; verify_clinic uses get_current_admin)
+  - apps/api/app/api/v1/clinics.py (PATCH uses get_current_admin)
+  - apps/api/app/schemas/verification.py (removed VerificationDocumentCreate — superseded by multipart), schemas/__init__.py (auth schemas in; create schema out)
+  - apps/api/app/models/user.py (added password_hash)
+  - apps/api/requirements.txt (added python-multipart==0.0.9, bcrypt==4.2.1, PyJWT==2.9.0, boto3==1.34.151)
+  - apps/api/.env.example, docker-compose.yml (auth vars, R2 vars, LOCAL_UPLOAD_DIR, DOC_UPLOAD_MAX_MB, CORS_ORIGINS; api start command now `alembic upgrade head && python -m scripts.create_admin && uvicorn ...`; new `web` service on :8002)
+  - apps/api/tests/conftest.py (ADMIN_EMAIL/ADMIN_PASSWORD/LOCAL_UPLOAD_DIR env; seeded_admin + admin_headers fixtures that log in for a real JWT), tests/test_verification_api.py (multipart uploads + JWT), tests/test_clinics_api.py (JWT)
+  - apps/web/README.md (placeholder -> real dashboard readme)
+  - docs/CURRENT_STATE.md, docs/progress/STATUS.md, docs/progress/LOG.md (this entry)
+- Key decisions made:
+  - HOSTING = RENDER, config only, NOT yet deployed (no account connected). Render fits this stack: two Docker web services (api :8000, ussd :8001) + Render-managed Postgres + Redis + a static_site for the dashboard — no reason to switch to Railway/DO. render.yaml is written and validated against the Render Blueprint schema by inspection; the FIRST real deploy is pending the user creating a Render account and pasting the `sync: false` secrets (AT_*, ADMIN_*, R2_*, SECRET_KEY, BOARD_NOTIFICATION_PHONE). Marked "deployment config ready, not yet deployed" in docs.
+  - ALEMBIC IS NOW THE SOLE SCHEMA MECHANISM: removed `Base.metadata.create_all` from app startup (it was load-bearing for fresh deploys). The api release/start command runs `alembic upgrade head && python -m scripts.create_admin` automatically (docker-compose `command:`, Render `releaseCommand:`). Verified `alembic upgrade head` on a fresh DB runs clean to 004_admin_auth. Test fixtures create their own schema (unchanged).
+  - AUTH = DELIBERATE MVP, REPLACES THE SHARED TOKEN (task 7/8): one admin user, seeded idempotently from ADMIN_EMAIL+ADMIN_PASSWORD env vars via scripts/create_admin.py (logged: ENV-VAR seeding, run by start/release commands), bcrypt hashed into users.password_hash (migration 004), login = POST /api/v1/auth/login (email+password) -> HS256 JWT (PyJWT, SECRET_KEY, ACCESS_TOKEN_EXPIRE_MINUTES default 1440/24h), required on POST /clinics/{id}/verify and PATCH /clinics/{id} (the same two endpoints as the stopgap). **This is NOT full production auth** — single admin role only, no refresh tokens, no phone OTP, no roles/farmer identity, no login UI, no rate limiting. Documented explicitly so a future session does not mistake it for done. Seed admin uses a synthetic placeholder phone (+254000000000) because User.phone is NOT NULL/unique but a board admin is not a USSD farmer; they log in by email.
+  - STORAGE = CLOUDFLARE R2 (S3-compatible, boto3 pinned) with a LOCAL-DISK fallback (task 10/11/12): when ALL of R2_ENDPOINT_URL/R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY/R2_BUCKET_NAME are set the file is put_object'd to R2 and the object URL (or R2_PUBLIC_BASE_URL prefix) is stored in the EXISTING file_url column (no schema change). When unset (the only way to run tonight, no R2 creds), LocalStorageClient writes to LOCAL_UPLOAD_DIR and the API serves it back at /uploads — the local demo's document submission keeps working with zero external credentials. Allowlist = PNG/JPEG/WebP + PDF, max DOC_UPLOAD_MAX_MB=10 (415/413). contact_phone + all SMS wiring untouched. R2 path verified against a FAKE boto3 client + real local-disk tests; marked code-complete/not-live (pending real R2 bucket+token).
+  - WEB DASHBOARD (task 13/14) = plain HTML/CSS/JS (zero framework, zero build) served by a 4-line http.server Dockerfile on :8002; fetches GET /api/v1/clinics/ and filters verification_status=="verified" client-side; API base read from window.VETLINK_API_BASE in index.html (local compose default localhost:8000; a Render static_site deploy must edit that one line to the api URL). Added CORS to apps/api (CORS_ORIGINS, dev default "*", methods GET/POST/PATCH) so the separate-origin dashboard can read public data. CORS allow-all is a logged dev/demo default to restrict before production.
+  - CI (task 15) = .github/workflows/ci.yml runs `./run_tests.sh` (both suites via throwaway python:3.11-slim containers, same as local) plus a docker build of all three images, on every push to main and every PR. Not yet observed green on GitHub (needs the Part 8 push); tests were green locally first.
+  - SMS (task 5/6): NO change to the stub claim. Real AT creds were not available, so the SMS section of CURRENT_STATE.md stays "stub" as originally instructed. Config wiring is done (AT_USERNAME/AT_API_KEY/AT_SENDER_ID/BOARD_NOTIFICATION_PHONE read from env, render.yaml sync:false) — marked code-complete/not-live pending real Africa's Talking credentials. POST /ussd webhook is likewise code-complete but never exercised against a real gateway/short code (pending the shared short code + domain; the /simulate + POST /ussd sandbox path is what was verified live).
+  - GIT (task 23/24/25/26/27/28): VetLink254 Software was living inside the parent multi-client repo (/mnt/c/Users/TH, tracking unrelated projects like VINETRACKER). It now has its OWN clean, isolated git history (git init in this folder only). .gitignore covers .env, __pycache__/, *.py[cod], node_modules/, local db files, uploads/; every commit's diff was grepped for secrets before committing; professional root README.md added; pushed to https://github.com/GafaNation1/VetLink254.git in small logical commits (one per PART) with the suite green, tagged v0.1.0-demo.
+- How to verify it works (this session, no Docker available in the WSL distro, so the FULL walkthrough was run against a locally-launched API (uvicorn + SQLite, alembic-migrated, admin seeded) + the real Flask USSD app with a fakeredis session store pointing at the live API; the venv lives at /tmp/opencode/vl254-venv, deps UNPINNED latest — the pinned python:3.11-slim container run via ./run_tests.sh is still pending a Docker-enabled machine):
+  - Tests: apps/api `python -m pytest tests/ --cov=app` -> 138 passed (96%); apps/ussd -> 73 passed.
+  - `alembic upgrade head` on a fresh SQLite DB -> clean through 004_admin_auth (head).
+  - API walkthrough (all live): login (admin@vetlink254.local / dev-admin-password-change-me) -> JWT; wrong password -> 401; create clinic; POST /clinics/1/documents multipart (PDF) -> 201 with /uploads/kyc/<uuid>/licence.pdf; GET that /uploads URL -> 200 (file really on disk); .exe upload -> 415; verify without JWT -> 401; verify WITH JWT -> verified + VL254-KE-00001; PATCH lat/lng/services WITH JWT -> 200; /match from downtown -> Demo Vet Clinic 1.137 km; /verify-license?license_number=KVB-1001 -> stub active; /notify -> {"mode":"stub"}; /clinics list -> dashboard data source.
+  - USSD walkthrough (real app -> real API): full find-a-vet (language -> welcome -> animal -> service -> county 'nai' -> Nairobi -> skip sub-location -> live match results "Demo Vet Clinic - 1.137 km" -> details END with VL254-KE-00001); verify-a-vet active/expired/not-found END screens; "00" on Home -> goodbye + session deleted; "00" mid-flow -> home without ending; Kiswahili welcome renders.
+  - Dashboard: / (index.html), style.css, app.js all 200 on :8002; API returns Access-Control-Allow-Origin for Origin http://localhost:8002.
+- Known gaps / not done yet (all externally credential-gated or explicitly deferred):
+  - NOT LIVE / PENDING (code complete only, never claimed working): Render deployment (no Render account — render.yaml ready), real SMS (pending AT creds — CURRENT_STATE SMS section left as "stub"), real USSD short code + public HTTPS webhook (pending telco provisioning), R2 file storage (pending R2 bucket/creds — local-disk fallback verified live), the dashboard's production URL (static_site deploy pending), CI green on GitHub (pending the push this session did — final confirmation via Actions is a follow-up).
+  - Explicitly deferred to a LATER pilot-readiness phase (not started, per scope): full RBAC/roles, refresh tokens, phone OTP, login UI, rate limiting, monitoring/alerting, backups, privacy/compliance docs, real KVB integration (externally blocked, unchanged), geocoding, wallet/payments, booking engine.
+  - Pinned-deps container run (./run_tests.sh) not re-verified this session (no Docker); the venv used unpinned latest deps (bcrypt 5.0.0, PyJWT 2.13.0, boto3 1.43.75) while requirements.txt pins older versions — the CI container run will exercise the exact pins.
+  - unique_code generator remains COUNT-based (not concurrency-safe) — unchanged, known gap.
+  - USSD suite still doesn't exercise the Flask HTTP layer at the HTTP level; the live walkthrough above does (via the harness), but it used fakeredis, not real Redis.
