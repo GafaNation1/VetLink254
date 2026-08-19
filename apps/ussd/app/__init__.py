@@ -1,0 +1,1 @@
+# apps/ussd/app/__init__.py — Marks the USSD adapter as a Python package

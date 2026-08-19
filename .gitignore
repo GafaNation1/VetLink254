@@ -1,0 +1,21 @@
+# Root .gitignore — keeps secrets and generated artifacts out of the VetLink254 repo
+__pycache__/
+*.py[cod]
+.env
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+node_modules/
+next.config.js
+
+# local databases + uploaded files (dev/demo artifacts, never committed)
+*.db
+*.sqlite3
+*.sqlite
+uploads/
+*.log

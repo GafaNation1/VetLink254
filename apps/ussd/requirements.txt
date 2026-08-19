@@ -1,0 +1,10 @@
+# apps/ussd/requirements.txt — Pinned Python dependencies for VetLink254 USSD thin adapter
+flask==3.0.3
+flask-cors==4.0.1
+redis==5.0.7
+requests==2.32.3
+gunicorn==22.0.0
+
+# Test dependencies (run `pytest` from apps/ussd; see apps/ussd/README.md for the exact command)
+pytest==8.2.2
+fakeredis==2.23.2
