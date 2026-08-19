@@ -1,0 +1,124 @@
+/* apps/web/style.css — clean, minimal styling for the VetLink254 public clinics dashboard */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: "Segoe UI", system-ui, -apple-system, Arial, sans-serif;
+  background: #f4f6f8;
+  color: #1f2933;
+  line-height: 1.5;
+}
+
+.hero {
+  background: linear-gradient(135deg, #0e6f3f, #0b8a4f);
+  color: #fff;
+  padding: 40px 20px;
+}
+
+.hero-inner {
+  max-width: 960px;
+  margin: 0 auto;
+}
+
+.hero h1 {
+  font-size: 2rem;
+  letter-spacing: 0.5px;
+}
+
+.tagline {
+  opacity: 0.9;
+  margin-top: 4px;
+}
+
+.content {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 24px 20px 48px;
+}
+
+.intro {
+  color: #52606d;
+  margin-bottom: 16px;
+}
+
+.status {
+  margin: 12px 0;
+  color: #52606d;
+}
+
+.status.error {
+  color: #c0392b;
+  font-weight: 600;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.card {
+  background: #fff;
+  border: 1px solid #e4e7eb;
+  border-radius: 10px;
+  padding: 18px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.card h2 {
+  font-size: 1.1rem;
+  color: #0e6f3f;
+  margin-bottom: 6px;
+}
+
+.card .meta {
+  font-size: 0.85rem;
+  color: #52606d;
+  margin-bottom: 10px;
+}
+
+.card .code {
+  display: inline-block;
+  background: #e8f5ee;
+  color: #0b5d36;
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 0.8rem;
+  padding: 3px 8px;
+  border-radius: 6px;
+  margin-bottom: 10px;
+}
+
+.card ul.services {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.card ul.services li {
+  background: #edf2f7;
+  color: #334155;
+  font-size: 0.78rem;
+  padding: 2px 8px;
+  border-radius: 20px;
+}
+
+.empty {
+  grid-column: 1 / -1;
+  background: #fff;
+  border: 1px dashed #cbd2d9;
+  border-radius: 10px;
+  padding: 24px;
+  text-align: center;
+  color: #52606d;
+}
+
+.footer {
+  text-align: center;
+  color: #7b8794;
+  font-size: 0.85rem;
+  padding: 24px 20px 40px;
+}

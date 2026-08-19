@@ -1,0 +1,44 @@
+<!doctype html>
+<!-- apps/web/index.html — Public read-only dashboard listing VERIFIED VetLink254 clinics.
+     Static page, no build step: plain HTML/CSS/JS. Fetches GET /api/v1/clinics/ from the Core API
+     and renders only clinics whose verification_status is "verified". -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>VetLink254 — Verified Veterinary Clinics</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header class="hero">
+      <div class="hero-inner">
+        <h1>VetLink254</h1>
+        <p class="tagline">Verified veterinary clinics across Kenya</p>
+      </div>
+    </header>
+
+    <main class="content">
+      <p class="intro">
+        Every clinic below has passed VetLink254's verification process and holds a unique
+        VetLink254 code. This list is live data from the VetLink254 Core API.
+      </p>
+
+      <p id="status" class="status" role="status">Loading verified clinics…</p>
+
+      <section id="grid" class="grid" aria-live="polite"></section>
+    </main>
+
+    <footer class="footer">
+      <p>VetLink254 · national veterinary-connect platform · demo build v0.1.0</p>
+    </footer>
+
+    <script>
+      // Base URL of the VetLink254 Core API.
+      //   - Same-origin proxy / production: set to "" (fetch /api/v1 relative).
+      //   - Local docker-compose demo: "http://localhost:8000".
+      //   - Render static site: the deployed API domain (e.g. "https://api.vetlink254.example").
+      window.VETLINK_API_BASE = "http://localhost:8000";
+    </script>
+    <script src="app.js"></script>
+  </body>
+</html>
