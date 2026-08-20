@@ -1,6 +1,18 @@
 # VetLink254 — Current Status Snapshot (living document, updated each session)
 
 ## What's built
+- **DEPLOYMENT-READINESS PASS (2026-08-21, PARTS 1–5).** Repo-wide dead-code audit (zero tracked dead
+  files; two gitignored local artifacts removed — `apps/api/.coverage`, empty `apps/api/uploads/kyc/`),
+  root README rewritten in an engineer voice for Kenyan government / KVB reviewers, and a new
+  **`docs/DEPLOYMENT_CREDENTIALS.md`** — the exhaustive real-world credentials checklist (Render + repo
+  connection, `SECRET_KEY` generation, `ADMIN_EMAIL`/`ADMIN_PASSWORD`, auto-provided
+  `DATABASE_URL`/`REDIS_URL`, Africa's Talking SMS + short code, Cloudflare R2, `BOARD_NOTIFICATION_PHONE`,
+  KVB (externally blocked), domain/DNS). The full `./run_tests.sh` (pinned python:3.11-slim containers)
+  was re-verified green — **api 138 (~96%) + ussd 73**, closing the "Docker unavailable" gap from prior
+  sessions. One flagged-not-edited finding: the `render.yaml` api service lost its
+  `startCommand`/`preDeployCommand` in commit `7fcc0f9` (docs claimed they existed); on a fresh Render
+  deploy you must re-add `preDeployCommand: alembic upgrade head && python -m scripts.create_admin`
+  (or run it once from the Render api shell) — see `docs/DEPLOYMENT_CREDENTIALS.md` §13.
 - **DEMO-READINESS PASS (2026-08-20, PARTS 1–8).** Render blueprint (config only, NOT deployed), minimal JWT auth replacing the shared admin token, R2 KYC storage with a local-disk fallback, a public verified-clinics dashboard, CI, and a clean isolated git history pushed to GitHub (tag `v0.1.0-demo`). Nothing that needs an external credential is claimed live — everything is marked "code complete, not yet live-verified — pending <credential>" (see the full LOG.md entry dated 2026-08-20 for every file/decision/test).
   - **Auth (VERIFIED live):** one admin seeded from `ADMIN_EMAIL`/`ADMIN_PASSWORD` env vars (idempotent, bcrypt into `users.password_hash`, migration `004`); `POST /api/v1/auth/login` → HS256 JWT (PyJWT, SECRET_KEY); `verify` + `PATCH /clinics/{id}` now require `Authorization: Bearer <JWT>` (401 no/bad token, 403 non-admin). DELIBERATE MVP — single admin role, no refresh/OTP/roles/login UI. Replaces the `X-Admin-Token` stopgap.
   - **File storage (local VERIFIED live; R2 code-complete):** `POST /clinics/{id}/documents` is now a MULTIPART file upload (file/doc_type/contact_phone) with a MIME allowlist (PNG/JPEG/WebP/PDF) + 10MB cap (415/413). With R2 env vars set → Cloudflare R2 via pinned boto3; unset → local disk (`LOCAL_UPLOAD_DIR`, served at `/uploads`). R2 verified via a fake boto3 client only — pending real R2 creds.
@@ -68,6 +80,12 @@
   - Verified live: GET /simulate and POST /ussd with an Origin header return `Access-Control-Allow-Origin`; OPTIONS preflight returns 200 with `Access-Control-Allow-Origin` + `Access-Control-Allow-Methods`; `/health` and `/nope` return no CORS headers. **DEV-ONLY: MUST be restricted to an origin allow-list (or removed) before any real deployment** — see What's broken / known gaps.
 
 ## What's next
+- **Deploy to Render — follow `docs/DEPLOYMENT_CREDENTIALS.md` top to bottom** (the exhaustive
+  credentials checklist): create the Render account + connect the repo, paste the `sync:false`
+  secrets (`SECRET_KEY`, `ADMIN_*`, `AT_*`, `R2_*`, `BOARD_NOTIFICATION_PHONE`), edit
+  `apps/web/index.html` `window.VETLINK_API_BASE` to the deployed api URL, set `CORS_ORIGINS`, and
+  (per the §2.15/§13 audit note) re-add the api `preDeployCommand` or run migrations+seed once from
+  the Render api shell.
 - **Swap the KVB stub for the real KVB endpoint (drop-in)** once KVB exposes a public REST API: set
   `KVB_API_BASE_URL` + real `KVB_CLIENT_ID`/`KVB_CLIENT_SECRET`; no other code changes should be needed
   (interface respected). Externally blocked meanwhile.
@@ -96,15 +114,14 @@
 
 ## What's broken / known gaps
 - **Auth (2026-08-20):** the shared `X-Admin-Token` stopgap is GONE, replaced by a single-admin bcrypt+JWT MVP (email/password login → HS256 Bearer token). It is still NOT full production auth — no roles, no refresh tokens, no OTP, no login UI, no rate limiting. Anyone with the seeded admin credentials can verify clinics and PATCH them; open endpoints (GET/POST clinics, documents upload, match, verify-license) stay unauthenticated by design (verify-license is a deliberate public farmer-facing lookup — decision logged).
-- **Render config is NOT yet deployed** (no Render account connected this session) — render.yaml + all docs are marked accordingly.
+- **Render config is NOT yet deployed** (no Render account connected this session) — render.yaml + all docs are marked accordingly. **Audit note (2026-08-21):** the api service in render.yaml currently has no `startCommand`/`preDeployCommand` (removed by commit `7fcc0f9`), so on a fresh Render deploy you must re-add `preDeployCommand: alembic upgrade head && python -m scripts.create_admin` or run it once from the Render api shell — see `docs/DEPLOYMENT_CREDENTIALS.md` §13.
 - **SMS is STUB/no-op until `AT_USERNAME` + `AT_API_KEY` are set** (logs a WARNING, sends nothing).
   `BOARD_NOTIFICATION_PHONE` SMS is a **stopgap** for the board/reporting layer (not yet built).
 - **R2 file storage is code-complete but NOT live-verified** (no R2 bucket/creds); the local-disk fallback (`LOCAL_UPLOAD_DIR`/`/uploads`) is what was verified live tonight.
-- **How the 2026-08-20 test run was executed:** Docker was NOT available in this WSL distro, so
-  `./run_tests.sh` (throwaway python:3.11-slim containers, pinned deps) could NOT be run. Both suites
-  ran in a local Python 3.14 venv with **unpinned latest** deps: **API 138 passed (~96%), USSD 73
-  passed.** The pinned 3.11-container run (which also exercises the exact requirements.txt pins) must
-  be re-verified when Docker is available — the CI workflow will do it on GitHub.
+- **How the 2026-08-21 test run was executed:** `./run_tests.sh` (throwaway python:3.11-slim
+  containers, pinned deps) ran green — **API 138 passed (~96%), USSD 73 passed.** This closes the
+  "Docker unavailable" gap from the 2026-08-20/18/16 sessions (which used a local Python 3.14 venv
+  with unpinned latest deps).
 - **Board receives TWO SMS per vet verification** (one from `GET /verify-license` per task 15, one
   from `/notify` "verify" event after the flow completes) — documented redundancy until the real
   reporting layer exists, not a bug.

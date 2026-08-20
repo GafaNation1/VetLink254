@@ -5,8 +5,8 @@
 > `docs/architecture.md` for the original product vision, then
 > `docs/progress/LOG.md` / `docs/progress/STATUS.md` for session-by-session history.
 >
-> Last updated: 2026-08-20 (DEMO-READINESS PASS: Render blueprint written but NOT deployed; minimal single-admin JWT auth replacing the shared admin token; KYC file upload with R2 code-complete + live local-disk fallback; public verified-clinics web dashboard; CI workflow; clean isolated git history pushed + tagged v0.1.0-demo). Prior: 2026-08-18 (USSD nav rework: context-dependent "0"/"00" home-vs-end, unrestricted county search + shared continuous pagination via "98", optional sub-location with "9 to skip"; SMS switched to the official africastalking SDK with KYC/board wiring; docs/KVB_INTEGRATION.md added). Prior: 2026-08-16 (47-county search, ~24-service paginated catalogue, EN/SW bilingual, SMS notifications); real KVB integration is stub-only and externally blocked.
-> Every command in this file was re-verified live against the running stack on 2026-08-14, and the demo-readiness changes (JWT auth, multipart upload, dashboard, USSD end-to-end) were re-verified live on 2026-08-20 (see the 2026-08-20 LOG.md entry for the full walkthrough transcript and the test runs).
+> Last updated: 2026-08-21 (DEPLOYMENT-READINESS PASS: repo-wide dead-code audit — zero tracked dead files; two gitignored local artifacts removed; flagged a render.yaml start/predeploy-command gap introduced by a later 2026-08-20 fix commit; root README rewritten in engineer voice for government/KVB reviewers; `docs/DEPLOYMENT_CREDENTIALS.md` added — the exhaustive real-world credentials checklist; pinned-container test run re-verified green: api 138 (~96%), ussd 73). Prior: 2026-08-20 (DEMO-READINESS PASS: Render blueprint written but NOT deployed; minimal single-admin JWT auth replacing the shared admin token; KYC file upload with R2 code-complete + live local-disk fallback; public verified-clinics web dashboard; CI workflow; clean isolated git history pushed + tagged v0.1.0-demo). Prior: 2026-08-18 (USSD nav rework: context-dependent "0"/"00" home-vs-end, unrestricted county search + shared continuous pagination via "98", optional sub-location with "9 to skip"; SMS switched to the official africastalking SDK with KYC/board wiring; docs/KVB_INTEGRATION.md added). Prior: 2026-08-16 (47-county search, ~24-service paginated catalogue, EN/SW bilingual, SMS notifications); real KVB integration is stub-only and externally blocked.
+> Every command in this file was re-verified live against the running stack on 2026-08-14, and the demo-readiness changes (JWT auth, multipart upload, dashboard, USSD end-to-end) were re-verified live on 2026-08-20 (see the 2026-08-20 LOG.md entry for the full walkthrough transcript and the test runs). On 2026-08-21 the full `./run_tests.sh` (pinned python:3.11-slim containers) was re-verified green — the previously "pending Docker" gap is now closed (see §2.11).
 
 ---
 
@@ -42,7 +42,7 @@ VetLink254 Software/
 │
 ├── .gitignore                                # ignores __pycache__/, *.pyc, .env, .venv, node_modules, local db, uploads
 ├── AGENT_PROTOCOL.md                         # build protocol + logging rules every agent must follow
-├── README.md                                 # root README (added 2026-08-20) — what this is + quick start
+├── README.md                                 # root README (rewritten 2026-08-21) — engineer-voice doc for gov/KVB reviewers + quick start
 ├── render.yaml                               # Render Blueprint — DEPLOYMENT CONFIG ONLY, NOT YET DEPLOYED
 ├── run_tests.sh                              # runs both pytest suites in throwaway python:3.11-slim containers
 ├── .github/workflows/ci.yml                  # CI: ./run_tests.sh + docker build of api/ussd/web (2026-08-20)
@@ -134,6 +134,8 @@ VetLink254 Software/
 └── docs/
     ├── CURRENT_STATE.md                      # ← YOU ARE HERE: comprehensive, current reference
     ├── architecture.md                       # original product vision / engineering blueprint (sections still referenced by LOG.md)
+    ├── DEPLOYMENT_CREDENTIALS.md             # (added 2026-08-21) — exhaustive real-world credentials checklist for going live
+    ├── KVB_INTEGRATION.md                    # technical contract for KVB's IT team (what VetLink254 needs / does NOT need)
     └── progress/
         ├── LOG.md                            # session-by-session build history (running log, append-only)
         └── STATUS.md                         # living snapshot: what's built / next / broken (updated each session)
@@ -313,8 +315,10 @@ The four containers (`vetlink_api`, `vetlink_ussd`, `vetlink_postgres`, `vetlink
 - **What exists:** an automated pytest suite covering `apps/api` (138 tests, ~96% coverage of `app/`) and
   `apps/ussd` (73 tests). On 2026-08-20 the API suite grew from 114 to 138 with the new auth + storage
   coverage (login success/failure, 401/403 matrix on verify+PATCH, multipart upload accept/415/413,
-  R2 via a fake boto3 client, local-disk uploads). No business logic regressions were introduced; all
-  138 + 73 green via a local Python 3.14 venv (Docker was unavailable that session — see §5.8).
+  R2 via a fake boto3 client, local-disk uploads). No business logic regressions were introduced. On
+  **2026-08-21** the full `./run_tests.sh` was re-run in the **pinned python:3.11-slim containers**:
+  **138 passed (~96%) + 73 passed — green**, closing the long-standing "Docker unavailable" gap (prior
+  sessions used a local Python 3.14 venv with unpinned deps; see §5.8).
 - **Run everything with one command (no docker-compose, no Postgres, no Redis needed):**
   ```bash
   ./run_tests.sh        # from the repo root
@@ -492,15 +496,23 @@ The four containers (`vetlink_api`, `vetlink_ussd`, `vetlink_postgres`, `vetlink
 
 ### 2.15 Render blueprint + CI (2026-08-20) — config ready, **NOT yet deployed**
 - **`render.yaml`** (root) declares the whole deployment: an **api web service** (docker image,
-  `startCommand` = uvicorn, `releaseCommand` = `alembic upgrade head && python -m scripts.create_admin`,
-  `healthCheckPath` = `/health`), a **ussd web service** (gunicorn, `API_BASE_URL` wired to the api
-  service URL), a **static_site** web, and managed **Postgres + Redis**. All secrets
-  (`AT_*`, `ADMIN_*`, `R2_*`, `SECRET_KEY`, `BOARD_NOTIFICATION_PHONE`) are `sync:false` — pasted by
-  the user, never committed. **This is deployment configuration, not a deployment** — no Render
-  account was connected this session, so nothing is live (see §5.9).
+  `healthCheckPath` = `/health`), a **ussd web service** (`API_BASE_URL` wired to
+  `https://vetlink-api.onrender.com`), a **static_site** web, and managed **Postgres + Redis**. All
+  secrets (`AT_*`, `ADMIN_*`, `R2_*`, `SECRET_KEY`, `BOARD_NOTIFICATION_PHONE`, `KVB_CLIENT_*`) are
+  `sync:false` — pasted by the user, never committed. **This is deployment configuration, not a
+  deployment** — no Render account was connected this session, so nothing is live (see §5.9).
+- **⚠️ AUDIT NOTE (2026-08-21):** the earlier fix commit `7fcc0f9` ("align docker startup command for
+  render deployment") **removed** the `startCommand` and `preDeployCommand` keys from `render.yaml`,
+  so the api container on Render will start uvicorn via its Dockerfile `CMD` but `alembic upgrade
+  head` / `python -m scripts.create_admin` will **NOT** run automatically on Render (they only run in
+  the docker-compose `command:`). Flagged, not edited, per the deployment-readiness session
+  constraint; before the first real deploy either re-add a `preDeployCommand: alembic upgrade head &&
+  python -m scripts.create_admin` to `render.yaml`'s api service, or run it once from the Render
+  api shell. This is the single deployment step that is not yet purely "paste a credential" — see
+  `docs/DEPLOYMENT_CREDENTIALS.md` §13.
 - **`.github/workflows/ci.yml`**: on every push to `main` and every PR, runs `./run_tests.sh` (both
   suites in the pinned 3.11 containers) and `docker build`s the api/ussd/web images. Final
-  green-on-GitHub confirmation is pending the first real push.
+  green-on-GitHub confirmation is pending the first post-audit push.
 
 ---
 
@@ -596,17 +608,18 @@ judge readiness. **This is NOT production-ready, and it is not close.**
    lead-response fees, clinic prepaid wallets) is fully specified in architecture.md but has **zero
    code** and **no chosen provider**, so there is no revenue path implemented.
 
-8. **Tests are green but the pinned-container run + CI-green-on-GitHub are pending, and the USSD
-   suite is lighter than the API suite.** `apps/api` (138 tests, ~96%) and `apps/ussd` (73 tests) are
-   all green and cover the matching engine, registration service, every API endpoint (incl. auth
-   login/401/403, multipart upload 415/413, `/notify` + KYC SMS wiring), the storage client (local +
-   fake-boto3 R2), the SMS client (SDK-backed: stub + fake-SDK live path), the KVB bridge (stub +
-   cache + endpoint + board SMS), and the USSD menu tree / session store / find-a-vet flow /
-   verify-a-vet flow / county search / continuous-numbered pagination / optional sub-location /
-   home-vs-end "00" nav / bilingual rendering. Still missing: a docker-compose integration test, USSD
-   HTTP-layer tests (`/ussd`, `/simulate`, `/health`, CORS), and (this session) a Docker-enabled run
-   of `./run_tests.sh` against the pinned deps — the 2026-08-20 run used a Python 3.14 venv with
-   unpinned latest deps, and the CI workflow's green run is pending the first push.
+8. **Tests are green (pinned-container run verified 2026-08-21); CI-green-on-GitHub is pending the
+   first post-audit push; the USSD suite is lighter than the API suite.** `apps/api` (138 tests, ~96%)
+   and `apps/ussd` (73 tests) are all green — on 2026-08-21 the full `./run_tests.sh` was re-verified
+   in the pinned python:3.11-slim containers (the previous sessions had to use a Python 3.14 venv with
+   unpinned deps because Docker was unavailable). The suite covers the matching engine, registration
+   service, every API endpoint (incl. auth login/401/403, multipart upload 415/413, `/notify` + KYC SMS
+   wiring), the storage client (local + fake-boto3 R2), the SMS client (SDK-backed: stub + fake-SDK live
+   path), the KVB bridge (stub + cache + endpoint + board SMS), and the USSD menu tree / session store /
+   find-a-vet flow / verify-a-vet flow / county search / continuous-numbered pagination / optional
+   sub-location / home-vs-end "00" nav / bilingual rendering. Still missing: a docker-compose
+   integration test, USSD HTTP-layer tests (`/ussd`, `/simulate`, `/health`, CORS), and the CI
+   workflow's first green-on-GitHub run (pending a push after this audit).
 
 9. **Dev conveniences baked in.** `create_all` was REMOVED from startup (2026-08-20; Alembic is now
    the sole schema mechanism, run automatically by the start/release commands), but `SECRET_KEY` and
@@ -754,15 +767,18 @@ docker compose up --build -d
 Based on everything built so far and the gaps above — ordered by what unblocks the most value / de-risks fastest:
 
 1. **Deploy to Render.** Everything that can be made live is `render.yaml`-ready but **nothing is
-   deployed** (no Render account was connected this session). Create the account, connect the repo,
-   paste the `sync:false` secrets (AT_*, ADMIN_*, R2_*, SECRET_KEY, BOARD_NOTIFICATION_PHONE), let it
-   provision managed Postgres + Redis, then edit `apps/web/index.html` `window.VETLINK_API_BASE` to
-   the deployed api URL. Confirm the api releaseCommand + USSD `API_BASE_URL` render references.
+   deployed** (no Render account was connected this session). Follow **`docs/DEPLOYMENT_CREDENTIALS.md`**
+   top to bottom — it is the exhaustive checklist (Render account + repo connection, `SECRET_KEY`
+   generation, `ADMIN_EMAIL`/`ADMIN_PASSWORD`, the auto-provided `DATABASE_URL`/`REDIS_URL`, AT SMS +
+   short code, Cloudflare R2, `BOARD_NOTIFICATION_PHONE`, the KVB block (externally blocked), and the
+   domain/DNS steps). Then edit `apps/web/index.html` `window.VETLINK_API_BASE` to the deployed api
+   URL and set `CORS_ORIGINS`. **Note the §2.15 audit finding:** re-add the api `preDeployCommand`
+   (`alembic upgrade head && python -m scripts.create_admin`) or run it once from the Render api shell.
 2. **Set the real external credentials to go live, each one independently gated:** Africa's Talking
    (`AT_USERNAME`/`AT_API_KEY`, username `"sandbox"` routes to the sandbox) to turn SMS on; a real
    short code + public HTTPS webhook for the USSD gateway; the four `R2_*` env vars to switch KYC
    storage from local disk to Cloudflare R2. Each is code-complete and needs only the credential + a
-   live test.
+   live test. All of this is itemised in `docs/DEPLOYMENT_CREDENTIALS.md`.
 3. **Full authentication (JWT + phone OTP + roles).** The 2026-08-20 pass delivered a single-admin
    MVP only. The real target: admin/board role for verify, clinic-owner auth for PATCH, a decision on
    farmer USSD identity (phone OTP), refresh tokens, a login UI, rate limiting.
