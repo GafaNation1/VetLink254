@@ -7,7 +7,7 @@ services:
     dockerfilePath: ./apps/api/Dockerfile
     buildCommand: ""
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port 8000
-    releaseCommand: alembic upgrade head && python -m scripts.create_admin
+    preDeployCommand: alembic upgrade head && python -m scripts.create_admin
     healthCheckPath: /health
     autoDeployTrigger: commit
     envVars:
