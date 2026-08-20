@@ -6,8 +6,6 @@ services:
     plan: starter
     dockerfilePath: ./apps/api/Dockerfile
     buildCommand: ""
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port 8000
-    preDeployCommand: alembic upgrade head && python -m scripts.create_admin
     healthCheckPath: /health
     autoDeployTrigger: commit
     envVars:
@@ -68,15 +66,11 @@ services:
     plan: starter
     dockerfilePath: ./apps/ussd/Dockerfile
     buildCommand: ""
-    startCommand: gunicorn --bind 0.0.0.0:8001 app.main:app
     healthCheckPath: /health
     autoDeployTrigger: commit
     envVars:
       - key: API_BASE_URL
-        fromService:
-          type: web
-          name: vetlink-api
-          property: url
+        value: https://vetlink-api.onrender.com
       - key: REDIS_URL
         fromService:
           type: keyvalue
@@ -100,6 +94,9 @@ services:
   - type: keyvalue
     name: vetlink-redis
     plan: starter
+    ipAllowList:
+      - source: 0.0.0.0/0
+        description: everywhere
 
 # --- Managed Postgres Database ---
 databases:
