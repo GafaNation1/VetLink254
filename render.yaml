@@ -96,13 +96,12 @@ services:
         source: /*
         destination: /index.html
 
+  # --- Key-Value (Redis) ---
+  - type: keyvalue
+    name: vetlink-redis
+    plan: starter
+
 # --- Managed Postgres Database ---
 databases:
   - name: vetlink-postgres
     plan: starter
-
-# --- Managed Redis Key-Value Store ---
-keyvalues:
-  - name: vetlink-redis
-    plan: starter
-    ipAllowList: []
