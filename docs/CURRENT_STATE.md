@@ -501,15 +501,7 @@ The four containers (`vetlink_api`, `vetlink_ussd`, `vetlink_postgres`, `vetlink
   secrets (`AT_*`, `ADMIN_*`, `R2_*`, `SECRET_KEY`, `BOARD_NOTIFICATION_PHONE`, `KVB_CLIENT_*`) are
   `sync:false` — pasted by the user, never committed. **This is deployment configuration, not a
   deployment** — no Render account was connected this session, so nothing is live (see §5.9).
-- **⚠️ AUDIT NOTE (2026-08-21):** the earlier fix commit `7fcc0f9` ("align docker startup command for
-  render deployment") **removed** the `startCommand` and `preDeployCommand` keys from `render.yaml`,
-  so the api container on Render will start uvicorn via its Dockerfile `CMD` but `alembic upgrade
-  head` / `python -m scripts.create_admin` will **NOT** run automatically on Render (they only run in
-  the docker-compose `command:`). Flagged, not edited, per the deployment-readiness session
-  constraint; before the first real deploy either re-add a `preDeployCommand: alembic upgrade head &&
-  python -m scripts.create_admin` to `render.yaml`'s api service, or run it once from the Render
-  api shell. This is the single deployment step that is not yet purely "paste a credential" — see
-  `docs/DEPLOYMENT_CREDENTIALS.md` §13.
+- **`render.yaml` startup & wiring (fixed 2026-08-21):** includes `preDeployCommand: alembic upgrade head && python -m scripts.create_admin` on `vetlink-api` so migrations run and admin seeds automatically on deployment; `CORS_ORIGINS` set to `sync: false` so operators explicitly supply allowed origins; and `vetlink-ussd`'s `API_BASE_URL` wired via a proper `fromService` reference to `vetlink-api`'s URL property.
 - **`.github/workflows/ci.yml`**: on every push to `main` and every PR, runs `./run_tests.sh` (both
   suites in the pinned 3.11 containers) and `docker build`s the api/ussd/web images. Final
   green-on-GitHub confirmation is pending the first post-audit push.
@@ -772,8 +764,7 @@ Based on everything built so far and the gaps above — ordered by what unblocks
    generation, `ADMIN_EMAIL`/`ADMIN_PASSWORD`, the auto-provided `DATABASE_URL`/`REDIS_URL`, AT SMS +
    short code, Cloudflare R2, `BOARD_NOTIFICATION_PHONE`, the KVB block (externally blocked), and the
    domain/DNS steps). Then edit `apps/web/index.html` `window.VETLINK_API_BASE` to the deployed api
-   URL and set `CORS_ORIGINS`. **Note the §2.15 audit finding:** re-add the api `preDeployCommand`
-   (`alembic upgrade head && python -m scripts.create_admin`) or run it once from the Render api shell.
+   URL and set `CORS_ORIGINS`.
 2. **Set the real external credentials to go live, each one independently gated:** Africa's Talking
    (`AT_USERNAME`/`AT_API_KEY`, username `"sandbox"` routes to the sandbox) to turn SMS on; a real
    short code + public HTTPS webhook for the USSD gateway; the four `R2_*` env vars to switch KYC

@@ -6,6 +6,7 @@ services:
     plan: starter
     dockerfilePath: ./apps/api/Dockerfile
     buildCommand: ""
+    preDeployCommand: alembic upgrade head && python -m scripts.create_admin
     healthCheckPath: /health
     autoDeployTrigger: commit
     envVars:
@@ -26,8 +27,9 @@ services:
         sync: false
       - key: ADMIN_PASSWORD
         sync: false
+      # CORS_ORIGINS is sync:false so operators must explicitly supply allowed dashboard origin(s) rather than committing an open "*" default
       - key: CORS_ORIGINS
-        value: "*"
+        sync: false
       - key: KVB_API_BASE_URL
         value: stub
       - key: KVB_CLIENT_ID
@@ -70,7 +72,10 @@ services:
     autoDeployTrigger: commit
     envVars:
       - key: API_BASE_URL
-        value: https://vetlink-api.onrender.com
+        fromService:
+          type: web
+          name: vetlink-api
+          property: url
       - key: REDIS_URL
         fromService:
           type: keyvalue

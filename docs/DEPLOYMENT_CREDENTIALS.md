@@ -402,29 +402,13 @@ dashboard origin.
 
 ---
 
-## 13. Known deployment caveats (from the Part-1 audit of this session)
+## 13. Known deployment caveats (updated 2026-08-21)
 
-1. **render.yaml no longer declares a `startCommand`/`preDeployCommand`.**
-   During the 2026-08-20 demo pass a later fix commit (`7fcc0f9`, "align docker
-   startup command for render deployment") **removed** the `startCommand` and
-   `preDeployCommand` keys from `render.yaml`, and `render.yaml` now relies on
-   the Dockerfiles' `CMD` (uvicorn/gunicorn/http.server). **Consequence:** the
-   api container will start uvicorn directly, but `alembic upgrade head` and
-   `python -m scripts.create_admin` will **NOT** run automatically on Render
-   (they are only in the docker-compose `command:`). On a fresh Render deploy
-   the schema will be empty and no admin will be seeded until you run the
-   migration+seed manually (via Render → api service → *Shell*:
-   `alembic upgrade head && python -m scripts.create_admin`). **This was
-   flagged rather than edited** per the session constraint; before going live,
-   either (a) re-add a `preDeployCommand: alembic upgrade head && python -m
-   scripts.create_admin` to `render.yaml`'s api service, or (b) plan to run it
-   once in the Render shell after the first deploy. This is the **one**
-   deployment step that is not yet purely "paste a credential".
+1. **`render.yaml` startup sequence is fully configured.** Both `preDeployCommand` (`alembic upgrade head && python -m scripts.create_admin`) and service references (`API_BASE_URL` via `fromService`) are correctly declared in `render.yaml`, so database migrations run, the admin user seeds, and the USSD adapter discovers the API URL automatically on deployment.
 2. **`apps/api/.env.example` has dev-placeholder admin creds** — harmless as a
    template, but make sure real values override them in Render (Render env vars
    take precedence over the file).
-3. **CORS default `*`** — set `CORS_ORIGINS` deliberately (§10) before any
-   production traffic.
+3. **`CORS_ORIGINS` is `sync: false`** — set it deliberately (§10) in the Render dashboard before any production traffic.
 4. **The USSD `/simulate` dev sandbox is unauthenticated** — it is fine on
    localhost, but a production-exposed `/simulate` would let anyone walk a menu.
    The production `POST /ussd` webhook is the real entry point; consider

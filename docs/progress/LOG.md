@@ -555,3 +555,23 @@
   - The render.yaml `preDeployCommand` restoration is still pending (flagged, not edited) — do it at deploy time per DEPLOYMENT_CREDENTIALS.md §13.
   - CI's green-on-GitHub run is still pending this session's push (the workflow was already committed in the 2026-08-20 pass; this push will trigger it for the first time).
   - Unchanged known gaps (all pre-existing, documented in CURRENT_STATE §5): single-admin JWT MVP (not full RBAC/OTP), SMS stub (needs AT creds), R2 code-complete (needs R2 creds), KVB stub (externally blocked), no telecom short code / public HTTPS webhook, CORS dev default `*`, count-based unique_code (not concurrency-safe), no docker-compose integration test, USSD suite lacks Flask HTTP-layer tests.
+
+## [2026-08-21] RENDER.YAML FIX PASS: restore startup sequence, lock down CORS_ORIGINS, fix USSD API_BASE_URL
+- Model/agent: google/gemini-3.5-flash-lite / opencode
+- Goal: Fix three specific, credential-free bugs in render.yaml (restore missing vetlink-api preDeployCommand, change hardcoded CORS_ORIGINS to sync:false with explanation comment, change hardcoded USSD API_BASE_URL to proper fromService reference), verify local stack/tests/USSD walkthrough, and update documentation completely.
+- Files created: none.
+- Files modified:
+  - render.yaml (added preDeployCommand `alembic upgrade head && python -m scripts.create_admin` to vetlink-api; changed CORS_ORIGINS to sync:false with comment explaining why; changed vetlink-ussd API_BASE_URL from hardcoded URL to fromService reference to vetlink-api url)
+  - docs/progress/LOG.md (this entry)
+  - docs/progress/STATUS.md (removed fixed render.yaml items from known gaps)
+  - docs/CURRENT_STATE.md (updated §2.15 Render blueprint section to reflect fixed render.yaml state)
+  - docs/DEPLOYMENT_CREDENTIALS.md (updated §13 known deployment caveats removing obsolete render.yaml preDeploy warning)
+- Key decisions made:
+  - RESTORED STARTUP SEQUENCE: added `preDeployCommand: alembic upgrade head && python -m scripts.create_admin` to vetlink-api in render.yaml so migrations run and admin seeds automatically on a fresh Render deploy, matching docker-compose behavior. Dockerfile CMD already starts uvicorn correctly, so no redundant startCommand was added.
+  - LOCKED DOWN CORS_ORIGINS: changed `CORS_ORIGINS` from `value: "*"` to `sync: false` with a clear explanation comment above it so operators must explicitly supply allowed dashboard origin(s) rather than committing an open default.
+  - SERVICE-BASED API_BASE_URL: changed vetlink-ussd's `API_BASE_URL` from `value: https://vetlink-api.onrender.com` to a proper `fromService` reference (`type: web`, `name: vetlink-api`, `property: url`), resolving correctly regardless of the Render-assigned subdomain.
+- How to verify it works:
+  - Local docker-compose stack & test suites confirmed intact (local behavior unchanged).
+  - render.yaml reviewed against Render Blueprint specifications.
+- Known gaps / not done yet (unchanged from prior sessions — explicitly NOT part of this session):
+  - R2 object storage (code-complete, pending credentials), KVB real integration (externally blocked, stub only), reviewed_by audit trail, unique_code concurrency safety, full RBAC/OTP auth, real SMS (pending AT credentials), telecom short code / public HTTPS webhook.

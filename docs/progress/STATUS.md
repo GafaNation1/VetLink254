@@ -1,6 +1,7 @@
 # VetLink254 — Current Status Snapshot (living document, updated each session)
 
 ## What's built
+- **RENDER.YAML BUG-FIX PASS (2026-08-21):** Restored missing startup sequence (`preDeployCommand: alembic upgrade head && python -m scripts.create_admin`) on `vetlink-api`, changed `CORS_ORIGINS` to `sync: false` with explanation comment, and updated `vetlink-ussd`'s `API_BASE_URL` to a proper `fromService` reference (`type: web`, `name: vetlink-api`, `property: url`).
 - **DEPLOYMENT-READINESS PASS (2026-08-21, PARTS 1–5).** Repo-wide dead-code audit (zero tracked dead
   files; two gitignored local artifacts removed — `apps/api/.coverage`, empty `apps/api/uploads/kyc/`),
   root README rewritten in an engineer voice for Kenyan government / KVB reviewers, and a new
@@ -114,7 +115,7 @@
 
 ## What's broken / known gaps
 - **Auth (2026-08-20):** the shared `X-Admin-Token` stopgap is GONE, replaced by a single-admin bcrypt+JWT MVP (email/password login → HS256 Bearer token). It is still NOT full production auth — no roles, no refresh tokens, no OTP, no login UI, no rate limiting. Anyone with the seeded admin credentials can verify clinics and PATCH them; open endpoints (GET/POST clinics, documents upload, match, verify-license) stay unauthenticated by design (verify-license is a deliberate public farmer-facing lookup — decision logged).
-- **Render config is NOT yet deployed** (no Render account connected this session) — render.yaml + all docs are marked accordingly. **Audit note (2026-08-21):** the api service in render.yaml currently has no `startCommand`/`preDeployCommand` (removed by commit `7fcc0f9`), so on a fresh Render deploy you must re-add `preDeployCommand: alembic upgrade head && python -m scripts.create_admin` or run it once from the Render api shell — see `docs/DEPLOYMENT_CREDENTIALS.md` §13.
+- **Render config is written and ready for deployment** (`render.yaml` includes startup preDeployCommand, sync:false CORS_ORIGINS, and service-based API_BASE_URL reference), but **NOT yet deployed** (no Render account connected this session).
 - **SMS is STUB/no-op until `AT_USERNAME` + `AT_API_KEY` are set** (logs a WARNING, sends nothing).
   `BOARD_NOTIFICATION_PHONE` SMS is a **stopgap** for the board/reporting layer (not yet built).
 - **R2 file storage is code-complete but NOT live-verified** (no R2 bucket/creds); the local-disk fallback (`LOCAL_UPLOAD_DIR`/`/uploads`) is what was verified live tonight.
