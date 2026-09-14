@@ -313,7 +313,7 @@ Two public URLs are needed. **Start this early**: DNS changes can take hours.
 | Field | Value |
 |---|---|
 | **What it is** | The public HTTPS address of the Core API (Render auto-assigns `https://vetlink-api.onrender.com` by default) |
-| **Where it is referenced** | `render.yaml` `vetlink-ussd` env block → `API_BASE_URL` is currently the hardcoded `https://vetlink-api.onrender.com` (line 73). **You should change this to your real domain** (or keep the `.onrender.com` default) |
+| **Where it is referenced** | `render.yaml` `vetlink-ussd` env block → `API_BASE_URL` is declared as `sync: false`. After your first deploy, copy the deployed `vetlink-api` service's public URL (e.g. `https://vetlink-api.onrender.com` or your custom domain) and paste it into the `vetlink-ussd` service's Environment tab as `API_BASE_URL`. (Render's Blueprint spec does not provide a confirmed, clean way to derive a scheme-prefixed public URL for a sibling web service via `fromService`, so this one is set manually like the other credentials). |
 | **Where it comes from** | Render auto-generates it; you may point a custom domain at it |
 | **Required** | ✅ Required — the ussd service must know where the API is |
 
@@ -404,7 +404,7 @@ dashboard origin.
 
 ## 13. Known deployment caveats (updated 2026-08-21)
 
-1. **`render.yaml` startup sequence is fully configured.** Both `preDeployCommand` (`alembic upgrade head && python -m scripts.create_admin`) and service references (`API_BASE_URL` via `fromService`) are correctly declared in `render.yaml`, so database migrations run, the admin user seeds, and the USSD adapter discovers the API URL automatically on deployment.
+1. **`render.yaml` startup sequence is configured (`preDeployCommand`), but `API_BASE_URL` on `vetlink-ussd` must be set manually.** `preDeployCommand` (`alembic upgrade head && python -m scripts.create_admin`) runs database migrations and seeds the admin user automatically on deployment. However, because Render's Blueprint spec does not support deriving a scheme-prefixed public URL for a sibling web service via `fromService`, `API_BASE_URL` on `vetlink-ussd` is `sync: false` — operators must paste `vetlink-api`'s public URL into the `vetlink-ussd` environment variables after the first deploy (§11.1).
 2. **`apps/api/.env.example` has dev-placeholder admin creds** — harmless as a
    template, but make sure real values override them in Render (Render env vars
    take precedence over the file).

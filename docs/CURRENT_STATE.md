@@ -501,7 +501,7 @@ The four containers (`vetlink_api`, `vetlink_ussd`, `vetlink_postgres`, `vetlink
   secrets (`AT_*`, `ADMIN_*`, `R2_*`, `SECRET_KEY`, `BOARD_NOTIFICATION_PHONE`, `KVB_CLIENT_*`) are
   `sync:false` — pasted by the user, never committed. **This is deployment configuration, not a
   deployment** — no Render account was connected this session, so nothing is live (see §5.9).
-- **`render.yaml` startup & wiring (fixed 2026-08-21):** includes `preDeployCommand: alembic upgrade head && python -m scripts.create_admin` on `vetlink-api` so migrations run and admin seeds automatically on deployment; `CORS_ORIGINS` set to `sync: false` so operators explicitly supply allowed origins; and `vetlink-ussd`'s `API_BASE_URL` wired via a proper `fromService` reference to `vetlink-api`'s URL property.
+- **`render.yaml` startup & wiring (updated 2026-08-21):** includes `preDeployCommand: alembic upgrade head && python -m scripts.create_admin` on `vetlink-api` so migrations run and admin seeds automatically on deployment; `CORS_ORIGINS` set to `sync: false` so operators explicitly supply allowed origins; and `vetlink-ussd`'s `API_BASE_URL` set to `sync: false` (operators manually set this in the Render dashboard to `vetlink-api`'s public URL post-deploy, as Render's Blueprint spec does not provide a confirmed public URL property for sibling web services via `fromService`).
 - **`.github/workflows/ci.yml`**: on every push to `main` and every PR, runs `./run_tests.sh` (both
   suites in the pinned 3.11 containers) and `docker build`s the api/ussd/web images. Final
   green-on-GitHub confirmation is pending the first post-audit push.

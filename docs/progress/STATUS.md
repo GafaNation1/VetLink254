@@ -1,7 +1,7 @@
 # VetLink254 — Current Status Snapshot (living document, updated each session)
 
 ## What's built
-- **RENDER.YAML BUG-FIX PASS (2026-08-21):** Restored missing startup sequence (`preDeployCommand: alembic upgrade head && python -m scripts.create_admin`) on `vetlink-api`, changed `CORS_ORIGINS` to `sync: false` with explanation comment, and updated `vetlink-ussd`'s `API_BASE_URL` to a proper `fromService` reference (`type: web`, `name: vetlink-api`, `property: url`).
+- **RENDER.YAML API_BASE_URL CORRECTION PASS (2026-08-21):** Restored missing startup sequence (`preDeployCommand: alembic upgrade head && python -m scripts.create_admin`) on `vetlink-api`, changed `CORS_ORIGINS` to `sync: false` with explanation comment, and set `vetlink-ussd`'s `API_BASE_URL` to `sync: false` (manual deployment step, as Render Blueprint spec does not provide a confirmed `fromService` URL property for sibling web services).
 - **DEPLOYMENT-READINESS PASS (2026-08-21, PARTS 1–5).** Repo-wide dead-code audit (zero tracked dead
   files; two gitignored local artifacts removed — `apps/api/.coverage`, empty `apps/api/uploads/kyc/`),
   root README rewritten in an engineer voice for Kenyan government / KVB reviewers, and a new

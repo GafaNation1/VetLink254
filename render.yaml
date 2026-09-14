@@ -71,11 +71,9 @@ services:
     healthCheckPath: /health
     autoDeployTrigger: commit
     envVars:
+      # API_BASE_URL is sync:false because Render's Blueprint spec does not offer a confirmed, clean way to derive a scheme-prefixed public URL for a sibling web service via fromService; operators must set this manually in the Render dashboard to vetlink-api's public URL after first deploy.
       - key: API_BASE_URL
-        fromService:
-          type: web
-          name: vetlink-api
-          property: url
+        sync: false
       - key: REDIS_URL
         fromService:
           type: keyvalue
