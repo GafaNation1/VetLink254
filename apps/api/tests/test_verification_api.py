@@ -223,3 +223,17 @@ class TestVerificationSMSWiring:
         data, files = _doc_files(contact_phone="0722123456")
         resp = client.post(f"/api/v1/clinics/{clinic.id}/documents", data=data, files=files)
         assert resp.status_code == 201  # submission still succeeds
+
+    def test_verify_derives_reviewed_by_from_jwt(self, client, clinic_factory, admin_headers):
+        clinic = clinic_factory(name="C", verification_status="pending_verification")
+        data, files = _doc_files()
+        client.post(f"/api/v1/clinics/{clinic.id}/documents", data=data, files=files)
+        resp = client.post(
+            f"/api/v1/clinics/{clinic.id}/verify",
+            json={"decision": "approved", "reviewed_by": "impostor@evil.com", "reason": "ok"},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 200
+        docs_resp = client.get(f"/api/v1/clinics/{clinic.id}/documents")
+        doc_data = docs_resp.json()[0]
+        assert doc_data["reviewed_by"] == "admin@vetlink254.test"

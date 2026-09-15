@@ -184,19 +184,20 @@ def verify_clinic(
         VerificationDocument.clinic_id == clinic.id,
         VerificationDocument.status == "pending",
     ).all()
+    reviewer = admin.email
     now = datetime.now(timezone.utc)
 
     if payload.decision == "approved":
         unique_code = approve_clinic(db, clinic)
         for doc in docs:
             doc.status = "approved"
-            doc.reviewed_by = payload.reviewed_by
+            doc.reviewed_by = reviewer
             doc.reviewed_at = now
         db.commit()
         # SMS the decision to the clinic's contact (fire-and-forget) + the board stopgap.
         _fire_and_forget_sms(_latest_contact_phone(clinic.id, db), _decision_message(clinic.name, unique_code, payload.reason))
         if settings.BOARD_NOTIFICATION_PHONE:
-            _fire_and_forget_sms(settings.BOARD_NOTIFICATION_PHONE, _board_decision_message(clinic.name, clinic.id, "approved", payload.reviewed_by))
+            _fire_and_forget_sms(settings.BOARD_NOTIFICATION_PHONE, _board_decision_message(clinic.name, clinic.id, "approved", reviewer))
         return VerificationResponse(
             message="Clinic verification approved",
             clinic_id=clinic.id,
@@ -209,12 +210,12 @@ def verify_clinic(
     reject_clinic(db, clinic, payload.reason)
     for doc in docs:
         doc.status = "rejected"
-        doc.reviewed_by = payload.reviewed_by
+        doc.reviewed_by = reviewer
         doc.reviewed_at = now
     db.commit()
     _fire_and_forget_sms(_latest_contact_phone(clinic.id, db), _decision_message(clinic.name, clinic.unique_code, payload.reason))
     if settings.BOARD_NOTIFICATION_PHONE:
-        _fire_and_forget_sms(settings.BOARD_NOTIFICATION_PHONE, _board_decision_message(clinic.name, clinic.id, "rejected", payload.reviewed_by))
+        _fire_and_forget_sms(settings.BOARD_NOTIFICATION_PHONE, _board_decision_message(clinic.name, clinic.id, "rejected", reviewer))
     return VerificationResponse(
         message="Clinic verification rejected",
         clinic_id=clinic.id,

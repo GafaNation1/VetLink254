@@ -1,6 +1,7 @@
 # VetLink254 — Current Status Snapshot (living document, updated each session)
 
 ## What's built
+- **AUDIT-TRAIL & CONCURRENCY FIX PASS (2026-08-21):** Fixed `reviewed_by` audit-trail gap (now derived server-side from authenticated admin JWT rather than trusted client body) and `unique_code` concurrency bug (secured with Postgres transaction advisory lock `pg_advisory_xact_lock` with SQLite test pass-through).
 - **RENDER.YAML API_BASE_URL CORRECTION PASS (2026-08-21):** Restored missing startup sequence (`preDeployCommand: alembic upgrade head && python -m scripts.create_admin`) on `vetlink-api`, changed `CORS_ORIGINS` to `sync: false` with explanation comment, and set `vetlink-ussd`'s `API_BASE_URL` to `sync: false` (manual deployment step, as Render Blueprint spec does not provide a confirmed `fromService` URL property for sibling web services).
 - **DEPLOYMENT-READINESS PASS (2026-08-21, PARTS 1–5).** Repo-wide dead-code audit (zero tracked dead
   files; two gitignored local artifacts removed — `apps/api/.coverage`, empty `apps/api/uploads/kyc/`),
@@ -140,7 +141,6 @@
 - Matching uses Haversine in Python (no PostGIS), no radius-tier fallback yet, no geocoding, and no wallet-balance lead-fee filter.
 - Tests: **API suite (138) + USSD suite (73) all green** — CI workflow now exists (`.github/workflows/ci.yml`) but its green-on-GitHub run is pending the first push; no docker-compose integration test yet, and the USSD suite does not cover the Flask HTTP layer/CORS/redis-failure routes yet. Test deps are in the runtime requirements.txt (bloat; a requirements-dev.txt split is future cleanup).
 - Alembic is now the SOLE schema mechanism (create_all removed from app startup); `alembic upgrade head` runs automatically in the api start/release commands and was verified on a fresh DB through `004_admin_auth`.
-- unique_code generator is COUNT-based (not concurrency-safe); needs a sequence table for scale.
 - Real file/object storage: local-disk fallback live; Cloudflare R2 code-complete but pending real credentials.
 - `apps/ussd` and `apps/web` are both built (thin "Find a Vet" adapter + public verified-clinics dashboard, both live-verified — see What's built).
 - USSD `/simulate` dev endpoint is unauthenticated (localhost-only ok; lock down before any external exposure).

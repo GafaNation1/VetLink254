@@ -11,6 +11,7 @@
 # A clinic being "verified" on VetLink254 is deliberately different from a vet holding an active
 # KVB license. The two concepts are NEVER merged into one field or one endpoint.
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 from app.models import Clinic
 
 def derive_region_code(verifying_authority: str | None) -> str:
@@ -35,10 +36,12 @@ def generate_unique_code(db: Session, verifying_authority: str | None) -> str:
     Format decided: VL254-<2-letter country/region code>-<zero-padded 5-digit
     sequence>, e.g. VL254-KE-00001. The region code is derived from
     `verifying_authority` (e.g. 'KVB-KE' -> 'KE'); 'XX' is used when absent.
-    Sequence is the count of already-coded clinics + 1 — simple, sequential,
-    and not intended to be concurrency-safe across simultaneous approvals
-    (a dedicated sequence table is a future hardening step).
+    Sequence is concurrency-safe: uses a Postgres advisory transaction lock
+    (pg_advisory_xact_lock) to serialize code generation across concurrent
+    transactions, falling back safely for SQLite test databases.
     """
+    if db.bind and db.bind.dialect.name == "postgresql":
+        db.execute(text("SELECT pg_advisory_xact_lock(254254)"))
     region = derive_region_code(verifying_authority)
     existing = db.query(Clinic).filter(Clinic.unique_code.isnot(None)).count()
     sequence = existing + 1

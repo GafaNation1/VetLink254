@@ -516,7 +516,7 @@ The four containers (`vetlink_api`, `vetlink_ussd`, `vetlink_postgres`, `vetlink
 | **`apps/api` bookings** | Bare CRUD only (GET list / POST create). No booking workflow, no status transitions, no scheduling logic, no booking reference flow from USSD. |
 | **`apps/api` users** | Bare CRUD only. No authentication, no OTP, no password, no email-attach flow, no `ussd_only_flag`→verified-account transition logic. |
 | **Matching Engine** | Basic Haversine matching works. Missing radius-tier fallback (5km→20km→50km→nearest), wallet-balance/lead-fee filter, geocoding for clinics without coordinates, PostGIS. |
-| **Registration / KYC** | Workflow works end-to-end (2026-08-20): **multipart file upload** with MIME allowlist (PNG/JPEG/WebP/PDF) + 10MB cap, stored to **local disk** (`LOCAL_UPLOAD_DIR`, served at `/uploads`) with a **code-complete Cloudflare R2 path** (boto3) that activates once the four `R2_*` env vars are set — **R2 not yet live** (no credentials). Unique-code generator is COUNT-based (not concurrency-safe). |
+| **Registration / KYC** | Workflow works end-to-end (2026-08-20): **multipart file upload** with MIME allowlist (PNG/JPEG/WebP/PDF) + 10MB cap, stored to **local disk** (`LOCAL_UPLOAD_DIR`, served at `/uploads`) with a **code-complete Cloudflare R2 path** (boto3) that activates once the four `R2_*` env vars are set — **R2 not yet live** (no credentials). Unique-code generator is concurrency-safe (Postgres advisory transaction lock `pg_advisory_xact_lock`). |
 | **Auth** | **Minimal single-admin JWT auth** (2026-08-20): bcrypt + PyJWT HS256, one admin seeded from env, login endpoint, JWT required on verify + PATCH. Deliberate MVP — no roles, no refresh tokens, no OTP, no login UI, no rate limiting. |
 | **USSD** | Two flows: "find a vet" (language → animal → catalogue w/ continuous numbering "98"=next page → 47-county type-to-search w/ shared pagination → optional sub-location (9 to skip) → results → details) and "verify a vet" (license number → live KVB status, stub). Bilingual EN/SW. Find-a-vet ends at a **read-only** clinic-details screen — booking creation, wallet top-up, clinic registration and check-status flows from the original prototype were **deliberately not ported**. 5 animals, ~24 services (3 pages, continuous numbers + free-text custom service), 47 counties via type-to-search with **approximate centroid coords** (no geocoding). "0"/"00" nav: context-dependent home-vs-end (see §2). |
 | **SMS notifications** | **STUB/no-op** until Africa's Talking creds set (`AT_USERNAME`/`AT_API_KEY`; username `"sandbox"` routes to the AT sandbox). Official **africastalking SDK** (pinned 2.0.3), `SMSClient` + `POST /api/v1/notify` wired: farmer SMS on match + verify; board stopgap SMS on verify; KYC submit/approve/reject SMSs; `verify-license` board SMS per lookup. Nothing is actually sent until creds exist. The board SMS is a **stopgap**, not the real reporting layer. |
@@ -593,8 +593,8 @@ judge readiness. **This is NOT production-ready, and it is not close.**
    sanitisation review, no dependency audit.
 
 6. **No load testing.** Nothing has ever been tested under concurrent USSD load or concurrent
-   clinic approvals. The unique-code generator is COUNT-based and **not concurrency-safe** (two
-   simultaneous approvals can produce the same code); the DB is a single small Postgres container.
+   clinic approvals (though unique-code generation is now concurrency-safe via transaction advisory
+   locks); the DB is a single small Postgres container.
 
 7. **No wallet/payment decision made.** The monetisation model (mobile-money push payments,
    lead-response fees, clinic prepaid wallets) is fully specified in architecture.md but has **zero

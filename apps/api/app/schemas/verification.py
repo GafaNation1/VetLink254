@@ -23,7 +23,7 @@ class VerificationDocumentResponse(BaseModel):
 
 class VerificationDecision(BaseModel):
     decision: Literal["approved", "rejected"]
-    reviewed_by: str
+    reviewed_by: Optional[str] = None
     reason: Optional[str] = None
 
 class VerificationResponse(BaseModel):
